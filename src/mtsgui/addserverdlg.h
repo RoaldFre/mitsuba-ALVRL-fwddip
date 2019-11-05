@@ -31,7 +31,7 @@ public:
     AddServerDialog(QWidget *parent);
     ~AddServerDialog();
 
-    ServerConnection getConnection() const;
+    std::vector<ServerConnection> getConnections() const;
 protected slots:
     void on_sshConnection_toggled();
     void on_directConnection_toggled();

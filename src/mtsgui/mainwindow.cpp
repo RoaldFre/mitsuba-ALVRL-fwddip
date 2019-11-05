@@ -2025,7 +2025,7 @@ bool ServerConnection::createWorker(QWidget *parent) {
             stream = new SocketStream(hostName.toStdString(), port);
         } else {
             std::vector<std::string> cmdLine;
-            cmdLine.push_back(formatString("bash -c 'cd %s; . setpath.sh; mtssrv -ls'", instDir.toLatin1().constData()));
+            cmdLine.push_back(formatString("bash -c 'cd %s; . setpath.sh; nice -n 19 mtssrv -ls'", instDir.toLatin1().constData()));
             stream = new SSHStream(userName.toStdString(),
                 hostName.toStdString(), cmdLine, port);
         }

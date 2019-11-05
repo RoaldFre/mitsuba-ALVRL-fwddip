@@ -72,15 +72,23 @@ void AddServerDialog::validate() {
     ui->buttons->button(QDialogButtonBox::Ok)->setEnabled(valid);
 }
 
-ServerConnection AddServerDialog::getConnection() const {
+std::vector<ServerConnection> AddServerDialog::getConnections() const {
+    /* Shared stuff */
     ServerConnection conn;
-    conn.hostName = ui->hostName->text();
     conn.userName = ui->userName->text();
     conn.instDir = ui->installDir->text();
     conn.port = ui->port->text().toInt();
     conn.type = ui->directConnection->isChecked()
         ? EDirectConnection : ESSHConnection;
-    return conn;
+
+    /* Possible list of hostnames */
+    std::vector<ServerConnection> conns;
+    QStringList hostnames = ui->hostName->text().split(" ", QString::SkipEmptyParts);
+    for (QString hostname : hostnames) {
+        conn.hostName = hostname;
+        conns.push_back(conn);
+    }
+    return conns;
 }
 
 void AddServerDialog::changeEvent(QEvent *e) {

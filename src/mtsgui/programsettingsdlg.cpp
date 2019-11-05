@@ -52,11 +52,13 @@ void ProgramSettingsDialog::setConnections(QList<ServerConnection> &connections)
 void ProgramSettingsDialog::on_addConnectionButton_clicked() {
     AddServerDialog d(this);
     if (d.exec()) {
-        ServerConnection c = d.getConnection();
-        if (c.createWorker(this)) {
-            c.worker->incRef();
-            m_connections.append(c);
-            ui->connectionList->addItem(c.toString());
+        std::vector<ServerConnection> cs = d.getConnections();
+        for (ServerConnection c : cs) {
+            if (c.createWorker(this)) {
+                c.worker->incRef();
+                m_connections.append(c);
+                ui->connectionList->addItem(c.toString());
+            }
         }
     }
 
