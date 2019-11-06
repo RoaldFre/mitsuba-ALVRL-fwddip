@@ -64,6 +64,7 @@ public:
     }
 
     void process(const WorkUnit *workUnit, WorkResult *workResult, const bool &stop) {
+        WorkProcessor::process(workUnit, workResult, stop);
         const RectangularWorkUnit *rect = static_cast<const RectangularWorkUnit *>(workUnit);
         BDPTWorkResult *result = static_cast<BDPTWorkResult *>(workResult);
         bool needsTimeSample = m_sensor->needsTimeSample();

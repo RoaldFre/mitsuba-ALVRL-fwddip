@@ -262,6 +262,7 @@ struct PathSeed {
 class SeedWorkUnit : public WorkUnit {
 public:
     inline void set(const WorkUnit *wu) {
+        WorkUnit::set(wu);
         m_seed = static_cast<const SeedWorkUnit *>(wu)->m_seed;
         m_timeout = static_cast<const SeedWorkUnit *>(wu)->m_timeout;
     }
@@ -283,11 +284,13 @@ public:
     }
 
     inline void load(Stream *stream) {
+        WorkUnit::load(stream);
         m_seed = PathSeed(stream);
         m_timeout = stream->readInt();
     }
 
     inline void save(Stream *stream) const {
+        WorkUnit::save(stream);
         m_seed.serialize(stream);
         stream->writeInt(m_timeout);
     }

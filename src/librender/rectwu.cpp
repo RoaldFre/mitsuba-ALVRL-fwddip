@@ -25,12 +25,14 @@ MTS_NAMESPACE_BEGIN
 /* ==================================================================== */
 
 void RectangularWorkUnit::set(const WorkUnit *wu) {
+    WorkUnit::set(wu);
     const RectangularWorkUnit *rect = static_cast<const RectangularWorkUnit *>(wu);
     m_offset = rect->m_offset;
     m_size = rect->m_size;
 }
 
 void RectangularWorkUnit::load(Stream *stream) {
+    WorkUnit::load(stream);
     int data[4];
     stream->readIntArray(data, 4);
     m_offset.x = data[0];
@@ -40,6 +42,7 @@ void RectangularWorkUnit::load(Stream *stream) {
 }
 
 void RectangularWorkUnit::save(Stream *stream) const {
+    WorkUnit::save(stream);
     int data[4];
     data[0] = m_offset.x;
     data[1] = m_offset.y;

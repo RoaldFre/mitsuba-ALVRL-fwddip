@@ -43,6 +43,7 @@ ImageBlock::~ImageBlock() {
 }
 
 void ImageBlock::load(Stream *stream) {
+    WorkResult::load(stream);
     m_offset = Point2i(stream);
     m_size = Vector2i(stream);
     stream->readFloatArray(
@@ -52,6 +53,7 @@ void ImageBlock::load(Stream *stream) {
 }
 
 void ImageBlock::save(Stream *stream) const {
+    WorkResult::save(stream);
     m_offset.serialize(stream);
     m_size.serialize(stream);
     stream->writeFloatArray(

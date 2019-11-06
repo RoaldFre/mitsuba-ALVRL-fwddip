@@ -291,6 +291,7 @@ public:
     }
 
     void process(const WorkUnit *workUnit, WorkResult *workResult, const bool &stop) {
+        WorkProcessor::process(workUnit, workResult, stop);
         const RectangularWorkUnit *rect = static_cast<const RectangularWorkUnit *>(workUnit);
         m_result = static_cast<ERPTWorkResult *>(workResult);
         m_result->origOffset = rect->getOffset();

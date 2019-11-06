@@ -60,6 +60,7 @@ public:
     }
 
     void load(Stream *stream) {
+        WorkResult::load(stream);
         clear();
         size_t count = (size_t) stream->readUInt();
         m_particleIndices.resize(count);
@@ -71,6 +72,7 @@ public:
     }
 
     void save(Stream *stream) const {
+        WorkResult::save(stream);
         stream->writeUInt((uint32_t) m_particleIndices.size());
         stream->writeUIntArray(&m_particleIndices[0], m_particleIndices.size());
         stream->writeUInt((uint32_t) m_photons.size());

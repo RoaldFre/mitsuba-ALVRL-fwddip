@@ -114,6 +114,7 @@ public:
     }
 
     void process(const WorkUnit *workUnit, WorkResult *workResult, const bool &stop) {
+        WorkProcessor::process(workUnit, workResult, stop);
         ImageBlock *result = static_cast<ImageBlock *>(workResult);
         const SeedWorkUnit *wu = static_cast<const SeedWorkUnit *>(workUnit);
         Path *current = new Path(), *proposed = new Path();
@@ -405,6 +406,7 @@ ParallelProcess::EStatus MLTProcess::generateWork(WorkUnit *unit, int worker) {
         return EFailure;
 
     SeedWorkUnit *workUnit = static_cast<SeedWorkUnit *>(unit);
+    workUnit->setUniqueID(m_workCounter);
     workUnit->setSeed(m_seeds[m_workCounter++]);
     workUnit->setTimeout(timeout);
     return ESuccess;

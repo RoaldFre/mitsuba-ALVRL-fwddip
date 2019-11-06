@@ -25,6 +25,7 @@ MTS_NAMESPACE_BEGIN
 /* ==================================================================== */
 
 void CaptureParticleWorkResult::load(Stream *stream) {
+    WorkResult::load(stream);
     size_t nEntries = (size_t) m_size.x * (size_t) m_size.y;
     stream->readFloatArray(reinterpret_cast<Float *>(m_bitmap->getFloatData()),
         nEntries * SPECTRUM_SAMPLES);
@@ -32,6 +33,7 @@ void CaptureParticleWorkResult::load(Stream *stream) {
 }
 
 void CaptureParticleWorkResult::save(Stream *stream) const {
+    WorkResult::save(stream);
     size_t nEntries = (size_t) m_size.x * (size_t) m_size.y;
     stream->writeFloatArray(reinterpret_cast<const Float *>(m_bitmap->getFloatData()),
         nEntries * SPECTRUM_SAMPLES);

@@ -35,17 +35,20 @@ MTS_NAMESPACE_BEGIN
 class MTS_EXPORT_RENDER RangeWorkUnit : public WorkUnit {
 public:
     inline void set(const WorkUnit *wu) {
+        WorkUnit::set(wu);
         const RangeWorkUnit *other = static_cast<const RangeWorkUnit *>(wu);
         m_rangeStart = other->m_rangeStart;
         m_rangeEnd = other->m_rangeEnd;
     }
 
     inline void load(Stream *stream) {
+        WorkUnit::load(stream);
         m_rangeStart = stream->readSize();
         m_rangeEnd = stream->readSize();
     }
 
     inline void save(Stream *stream) const {
+        WorkUnit::save(stream);
         stream->writeSize(m_rangeStart);
         stream->writeSize(m_rangeEnd);
     }

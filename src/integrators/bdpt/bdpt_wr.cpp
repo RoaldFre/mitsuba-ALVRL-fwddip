@@ -107,6 +107,7 @@ void BDPTWorkResult::dump(const BDPTConfiguration &conf,
 #endif
 
 void BDPTWorkResult::load(Stream *stream) {
+	WorkResult::load(stream);
 #if BDPT_DEBUG == 1
     for (size_t i=0; i<m_debugBlocks.size(); ++i)
         m_debugBlocks[i]->load(stream);
@@ -117,6 +118,7 @@ void BDPTWorkResult::load(Stream *stream) {
 }
 
 void BDPTWorkResult::save(Stream *stream) const {
+	WorkResult::save(stream);
 #if BDPT_DEBUG == 1
     for (size_t i=0; i<m_debugBlocks.size(); ++i)
         m_debugBlocks[i]->save(stream);

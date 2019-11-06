@@ -47,6 +47,8 @@ ParallelProcess::EStatus BlockedImageProcess::generateWork(WorkUnit *unit, int w
     if (m_numBlocksTotal == m_numBlocksGenerated)
         return EFailure;
 
+    rect.setUniqueID(m_numBlocksGenerated);
+
     Point2i pos = m_curBlock * m_blockSize;
     rect.setOffset(pos + m_offset);
     rect.setSize(Vector2i(

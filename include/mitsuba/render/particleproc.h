@@ -115,6 +115,7 @@ protected:
     size_t m_granularity;
     ref<Mutex> m_resultMutex;
     size_t m_receivedResultCount;
+    size_t m_uniqueID; /// unique ID to be assigned to next work unit
 };
 
 /**

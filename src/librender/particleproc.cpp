@@ -38,6 +38,8 @@ ParticleProcess::ParticleProcess(EMode mode, size_t workCount, size_t granularit
     m_progress = new ProgressReporter(progressText, workCount,
         progressReporterPayload);
     m_resultMutex = new Mutex();
+
+    m_uniqueID = 0;
 }
 
 ParticleProcess::~ParticleProcess() {
@@ -62,6 +64,7 @@ ParallelProcess::EStatus ParticleProcess::generateWork(WorkUnit *unit, int worke
 
     range->setRange(m_numGenerated, m_numGenerated + workUnitSize - 1);
     m_numGenerated += workUnitSize;
+    range->setUniqueID(m_uniqueID++);
 
     return ESuccess;
 }
@@ -106,6 +109,7 @@ void ParticleTracer::prepare() {
 
 void ParticleTracer::process(const WorkUnit *workUnit, WorkResult *workResult,
         const bool &stop) {
+    WorkProcessor::process(workUnit, workResult, stop);
     const RangeWorkUnit *range = static_cast<const RangeWorkUnit *>(workUnit);
     MediumSamplingRecord mRec;
     Intersection its;

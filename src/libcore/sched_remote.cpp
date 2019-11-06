@@ -67,6 +67,8 @@ RemoteWorker::RemoteWorker(const std::string &name, Stream *stream) : Worker(nam
     m_reader->start();
     m_inFlight = 0;
     m_isRemote = true;
+    m_remoteConnectionDropped = false;
+    m_waitingForPong = false;
     Log(EDebug, "Connection to \"%s\" established (%i cores).",
         m_nodeName.c_str(), m_coreCount);
 }
@@ -78,11 +80,13 @@ RemoteWorker::~RemoteWorker() {
 
     LockGuard lock(m_mutex);
     m_reader->shutdown();
-    m_memStream->writeShort(StreamBackend::EQuit);
-    try {
-        flush();
-    } catch (std::runtime_error &e) {
-        Log(EWarn, "Could not flush buffer: %s", e.what());
+    if (!m_remoteConnectionDropped) {
+        m_memStream->writeShort(StreamBackend::EQuit);
+        try {
+            flush();
+        } catch (std::runtime_error &e) {
+            Log(EWarn, "Could not flush buffer: %s", e.what());
+        }
     }
     m_reader->join();
 }
@@ -90,19 +94,47 @@ RemoteWorker::~RemoteWorker() {
 void RemoteWorker::start(Scheduler *scheduler, int workerIndex, int coreOffset) {
     Worker::start(scheduler, workerIndex, coreOffset);
     m_reader->m_schedItem.coreOffset = coreOffset;
+    m_reader->m_schedItem.workerIndex = workerIndex;
 }
 
 void RemoteWorker::flush() {
-    m_memStream->seek(0);
-    m_memStream->copyTo(m_stream);
-    m_memStream->reset();
-    m_stream->flush();
+    try {
+        m_memStream->seek(0);
+        m_memStream->copyTo(m_stream);
+        m_memStream->reset();
+        m_stream->flush();
+    } catch (std::runtime_error &e) {
+        Log(EWarn, "Could not flush remote worker for node \"%s\"! "
+                "Message \"%s\". We'll stop using this remote node!",
+                getNodeName().c_str(), e.what());
+        dropRemoteConnection(true);
+    }
+}
+
+void RemoteWorker::dropRemoteConnection(bool connectionAlreadyDead) {
+    if (!m_remoteConnectionDropped) // if this is the first time that we are called: signal it
+        m_scheduler->signalDroppedRemoteWorker(this);
+    m_reader->shutdown();
+    if (!connectionAlreadyDead && !m_remoteConnectionDropped) {
+        /* If the connection was not explicitly dropped already (e.g.
+         * because ping timed out but connection still seems to be alive),
+         * try to let the back end quit gracefully */
+        m_memStream->writeShort(StreamBackend::EDropConnection);
+        try {
+            flush();
+        } catch (std::runtime_error &e) {
+            Log(EWarn, "Could not flush buffer when gracefully stopping "
+                    "dropped back-end: %s", e.what());
+        }
+    }
+    m_remoteConnectionDropped = true;
+    m_finishCond->signal();
 }
 
 void RemoteWorker::run() {
     Scheduler::EStatus status;
 
-    while ((status = acquireWork(false, true, true)) != Scheduler::EStop) {
+    while (!m_remoteConnectionDropped && (status = acquireWork(false, true, true)) != Scheduler::EStop) {
         if (status == Scheduler::ENone) {
             flush();
             if ((status = acquireWork(false, false, true)) == Scheduler::EStop)
@@ -207,16 +239,40 @@ void RemoteWorker::run() {
             /* There are now too many packets in transit. Wait
                until this clears up a bit before attempting to
                send more work */
-            while (m_inFlight > MTS_CONTINUE_FACTOR * m_coreCount)
-                m_finishCond->wait();
+            while (m_inFlight > MTS_CONTINUE_FACTOR * m_coreCount) {
+                if (!m_finishCond->wait(MTS_PING_TIMEOUT * 1000)) {
+                    /* No work unit was finished for the past
+                     * MTS_PING_TIMEOUT seconds, ping the remote to see if
+                     * it's still alive */
+                    LockGuard lock(m_mutex);
+                    if (m_waitingForPong) {
+                        /* We already pinged but still did not get a
+                         * response in at least MTS_PING_TIMEOUT seconds */
+                        Log(EWarn, "Remote end took too long to reply to "
+                                "our ping request. We'll stop using it!");
+                        dropRemoteConnection(false);
+                    } else {
+                        m_memStream->writeShort(StreamBackend::EPing);
+                        m_waitingForPong = true;
+                        flush();
+                    }
+                }
+                if (m_remoteConnectionDropped)
+                    break;
+            }
         }
     }
     LockGuard lock(m_mutex);
-    flush();
+    if (!m_remoteConnectionDropped) {
+        flush();
+    }
 }
 
 void RemoteWorker::signalResourceExpiration(int id) {
     LockGuard lock(m_mutex);
+    if (m_remoteConnectionDropped) {
+        return;
+    }
     if (m_resources.find(id) == m_resources.end()) {
         return;
     }
@@ -228,6 +284,9 @@ void RemoteWorker::signalResourceExpiration(int id) {
 
 void RemoteWorker::signalProcessCancellation(int id) {
     LockGuard lock(m_mutex);
+    if (m_remoteConnectionDropped) {
+        return;
+    }
     if (m_processes.find(id) == m_processes.end()) {
         return;
     }
@@ -239,6 +298,9 @@ void RemoteWorker::signalProcessCancellation(int id) {
 
 void RemoteWorker::signalProcessTermination(int id) {
     LockGuard lock(m_mutex);
+    if (m_remoteConnectionDropped) {
+        return;
+    }
     if (m_processes.find(id) == m_processes.end()) {
         return;
     }
@@ -246,6 +308,16 @@ void RemoteWorker::signalProcessTermination(int id) {
     m_memStream->writeInt(id);
     flush();
     m_processes.erase(id);
+}
+
+void RemoteWorker::signalDropConnection() {
+    LockGuard lock(m_mutex);
+    if (m_remoteConnectionDropped) {
+        return;
+    }
+    m_memStream->writeShort(StreamBackend::EDropConnection);
+    flush();
+    m_processes.clear();
 }
 
 void RemoteWorker::clear() {
@@ -270,12 +342,18 @@ void RemoteWorkerReader::run() {
     while (true) {
         try {
             msg = m_stream->readShort();
-            id = m_stream->readInt();
 
+            if (msg == StreamBackend::EPong) {
+                m_parent->signalPong();
+                continue;
+            }
+
+            id = m_stream->readInt();
             if (id != m_currentID) {
                 m_parent->setProcessByID(m_schedItem, id);
                 m_currentID = id;
             }
+            m_schedItem.local = false;
 
             switch (msg) {
                 case StreamBackend::EWorkResult:
@@ -305,8 +383,12 @@ void RemoteWorkerReader::run() {
                     Log(EError, "Received an unknown message (type %i)", id);
             };
         } catch (std::runtime_error &e) {
-            if (!m_shutdown)
-                throw e;
+            if (!m_shutdown) {
+                Log(EWarn, "Received error in remote reader for node \"%s\"! "
+                        "Message \"%s\". We'll stop using this remote node!",
+                        m_parent->getNodeName().c_str(), e.what());
+                m_parent->signalDroppedConnection();
+            }
             break;
         }
     }
@@ -454,11 +536,27 @@ void StreamBackend::run() {
                         rp->decRef();
                     }
                     break;
+                case EDropConnection : {
+                        for (size_t id = 0; id < m_processes.size(); id++) {
+                            RemoteProcess *rp = m_processes[id];
+                            rp->setDone();
+                            rp->decRef();
+                            m_scheduler->schedule(rp);
+                        }
+                        m_processes.clear();
+                        running = false;
+                        Log(EWarn, "Upstream asked us to drop the connection - bailing out!");
+                    }
+                    break;
                 case EResourceExpired: {
                         int id = m_stream->readInt();
                         int localID = m_resources[id];
                         m_scheduler->unregisterResource(localID);
                         m_resources.erase(id);
+                    }
+                    break;
+                case EPing: {
+                        sendPong();
                     }
                     break;
                 case EQuit: running = false; break;
@@ -529,6 +627,21 @@ void StreamBackend::sendWorkResult(int id, const WorkResult *result, bool cancel
         m_stream->flush();
     } catch (std::exception &) {
         Log(EWarn, "Connection error - could not submit work result");
+        /* A connection failure occurred - this will eventually be
+           caught and handled in run() and is therefore ignored for now */
+    }
+}
+
+void StreamBackend::sendPong() {
+    LockGuard lock(m_sendMutex);
+    m_memStream->reset();
+    m_memStream->writeShort(EPong);
+    try {
+        m_memStream->seek(0);
+        m_memStream->copyTo(m_stream);
+        m_stream->flush();
+    } catch (std::exception &) {
+        Log(EWarn, "Connection error - could not send pong");
         /* A connection failure occurred - this will eventually be
            caught and handled in run() and is therefore ignored for now */
     }
