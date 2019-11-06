@@ -23,6 +23,11 @@
 #include <mitsuba/core/serialization.h>
 #include <mitsuba/core/lock.h>
 #include <deque>
+#include <list>
+
+/** A remote server is considered as dead if it does not respond to a ping
+ * request within this time frame (in seconds). */
+#define MTS_PING_TIMEOUT (1*60)
 
 /**
  * Uncomment this to enable scheduling debug messages
@@ -58,11 +63,26 @@ public:
     /// Return a string representation
     virtual std::string toString() const = 0;
 
+    inline void setUniqueID(uint64_t uid) { m_uniqueID = uid; }
+    inline uint64_t getUniqueID() const { return m_uniqueID; }
+
     MTS_DECLARE_CLASS()
 protected:
     /// Virtual destructor
     virtual ~WorkUnit() { }
+
+    /// Unique identifier
+    uint64_t m_uniqueID;
 };
+inline void WorkUnit::set(const WorkUnit *workUnit) {
+    m_uniqueID = workUnit->getUniqueID();
+}
+inline void WorkUnit::load(Stream *stream) {
+    m_uniqueID = stream->readULong();
+}
+inline void WorkUnit::save(Stream *stream) const {
+    stream->writeULong(getUniqueID());
+}
 
 /**
  * \brief Abstract work result -- represents the result of a
@@ -88,11 +108,26 @@ public:
     /// Return a string representation
     virtual std::string toString() const = 0;
 
+    virtual inline void initFromWorkUnit(const WorkUnit *wu) {
+        m_uniqueID = wu->getUniqueID();
+    }
+
+    inline uint64_t getUniqueID() const { return m_uniqueID; }
+
     MTS_DECLARE_CLASS()
 protected:
     /// Virtual destructor
     virtual ~WorkResult() { }
+
+    /// The corresponding unique ID of the work unit.
+    uint64_t m_uniqueID;
 };
+inline void WorkResult::load(Stream *stream) {
+    m_uniqueID = stream->readULong();
+}
+inline void WorkResult::save(Stream *stream) const {
+    stream->writeULong(getUniqueID());
+}
 
 /**
  * \brief Abstract work processor -- takes work units and turns them into
@@ -175,6 +210,10 @@ protected:
 protected:
     std::map<std::string, SerializableObject *> m_resources;
 };
+inline void WorkProcessor::process(const WorkUnit *workUnit, WorkResult *workResult,
+        const bool &stop) {
+    workResult->initFromWorkUnit(workUnit);
+}
 
 /**
  * \brief Abstract parallelizable task.
@@ -435,6 +474,9 @@ public:
     /// Unregister a worker from the scheduler
     void unregisterWorker(Worker *processor);
 
+    /// Signal that a remote worker has dropped its connection
+    void signalDroppedRemoteWorker(Worker *worker);
+
     /// Get the number of workers
     size_t getWorkerCount() const;
 
@@ -493,7 +535,7 @@ public:
         /* Current number of in-flight work units */
         int inflight;
         /* Is the parallel process still generating work */
-        bool morework;
+        bool stillgenerating;
         /* Was the process cancelled using \c cancel()?*/
         bool cancelled;
         /* Is the process currently in the queue? */
@@ -504,13 +546,34 @@ public:
         ref<WaitFlag> done;
         /* Log level for events associated with this process */
         ELogLevel logLevel;
-
         inline ProcessRecord(int id, ELogLevel logLevel, Mutex *mutex)
-         : id(id), inflight(0), morework(true), cancelled(false),
+         : id(id), inflight(0), stillgenerating(true), cancelled(false),
             active(true), logLevel(logLevel) {
             cond = new ConditionVariable(mutex);
             done = new WaitFlag();
+            failedWork = std::deque< ref<const WorkUnit> >();
         }
+        inline bool hasFailedWork() const {
+            return !failedWork.empty();
+        }
+        inline bool hasMoreWork() const {
+            return stillgenerating || hasFailedWork();
+        }
+        inline ref<const WorkUnit> popFailedWork() {
+            if (!hasFailedWork()) {
+                SLog(EError, "Trying to pop failed work when there is none!");
+            }
+            ref <const WorkUnit> wu = failedWork.front();
+            failedWork.pop_front();
+            return wu;
+        }
+        inline void pushFailedWork(const WorkUnit *wu) {
+            failedWork.push_back(wu);
+        }
+    private:
+        /** Work that failed (e.g. due to dropped connection to remote worker)
+         * and needs to be rescheduled. */
+        std::deque<ref <const WorkUnit> > failedWork;
     };
 
     /**
@@ -529,6 +592,7 @@ public:
         ref<WorkUnit> workUnit;
         ref<WorkResult> workResult;
         bool stop;
+        bool local;
 
         inline Item() : id(-1), workerIndex(-1), coreOffset(-1),
             proc(NULL), rec(NULL), stop(false) {
@@ -550,6 +614,14 @@ public:
 
         inline ResourceRecord(std::vector<SerializableObject *> resources)
          : resources(resources), refCount(1), multi(true) {
+        }
+    };
+
+    struct RemoteInFlightWork {
+        int processID;
+        ref<const WorkUnit> workUnit;
+        inline RemoteInFlightWork(int id, const WorkUnit *wu)
+         : processID(id), workUnit(wu) {
         }
     };
 
@@ -602,9 +674,24 @@ protected:
             return;
         }
         LockGuard lock(m_mutex);
+        if (!item.local && !item.stop) {
+            /* Remote work got completed: delete it from the in-flight list. */
+            std::list<RemoteInFlightWork> &remoteInFlight = m_remoteWorkerInFlight[item.workerIndex];
+            std::list<RemoteInFlightWork>::iterator it;
+            for (it = remoteInFlight.begin(); it != remoteInFlight.end(); ++it) {
+                if (it->workUnit->getUniqueID() == item.workResult->getUniqueID())
+                    break;
+            }
+            if (it == remoteInFlight.end()) {
+                Log(EError, "Could not find in-flight work unit for "
+                        "released remote work! Was looking for ID %ld.",
+                        item.workResult->getUniqueID());
+            }
+            remoteInFlight.erase(it);
+        }
         --rec->inflight;
         rec->cond->signal();
-        if (rec->inflight == 0 && !rec->morework && !item.stop)
+        if (rec->inflight == 0 && !rec->hasMoreWork() && !item.stop)
             signalProcessTermination(item.proc, item.rec);
     }
 
@@ -662,6 +749,10 @@ private:
     std::map<int, ResourceRecord *> m_resources;
     /// List of all active workers
     std::vector<Worker *> m_workers;
+    /** Maps worker index of remote workers to their unfinished work units,
+     * together with their process id. Used for recovery from lost
+     * connections. */
+    std::map<int, std::list<RemoteInFlightWork> > m_remoteWorkerInFlight;
     int m_resourceCounter, m_processCounter;
     bool m_running;
 };

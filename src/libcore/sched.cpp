@@ -57,24 +57,88 @@ Scheduler::Scheduler() {
     m_resourceCounter = 0;
     m_processCounter = 0;
     m_running = false;
+    m_remoteWorkerInFlight.clear();
 }
 
 Scheduler::~Scheduler() {
     for (size_t i=0; i<m_workers.size(); ++i)
-        m_workers[i]->decRef();
+        if (m_workers[i])
+            m_workers[i]->decRef();
 }
 
 void Scheduler::registerWorker(Worker *worker) {
     LockGuard lock(m_mutex);
     m_workers.push_back(worker);
+    if (worker->isRemoteWorker()) {
+        m_remoteWorkerInFlight[m_workers.size()-1] = std::list<RemoteInFlightWork>();
+    }
     worker->incRef();
 }
 
 void Scheduler::unregisterWorker(Worker *worker) {
     LockGuard lock(m_mutex);
-    m_workers.erase(std::remove(m_workers.begin(), m_workers.end(), worker),
-        m_workers.end());
+    /* Don't delete from vector, just set to NULL to make sure that the
+     * worker indices stay consistent */
+    std::vector<Worker*>::iterator it = std::find(m_workers.begin(), m_workers.end(), worker);
+    if (it == m_workers.end() || *it == NULL) {
+        Log(EError, "Tried to unregister worker that was not known!");
+    }
+    *it = NULL;
     worker->decRef();
+}
+
+void Scheduler::signalDroppedRemoteWorker(Worker *worker) {
+    LockGuard lock(m_mutex);
+    if (!worker->isRemoteWorker())
+        Log(EError, "signalDroppedRemoteWorker received a non-remote worker!");
+    int i = worker->m_schedItem.workerIndex;
+    if (m_workers[i] != worker) {
+        std::vector<Worker*>::iterator it = std::find(m_workers.begin(), m_workers.end(), worker);
+        if (it == m_workers.end()) {
+            Log(EError, "signalDroppedRemoteWorker discovered inconsistency "
+                    "in workerIndex! Expected worker at %d, but worker was "
+                    "not known at all!", i);
+        } else {
+            int true_i = std::distance(m_workers.begin(), it);
+            Log(EError, "signalDroppedRemoteWorker discovered inconsistency "
+                    "in workerIndex! Expected worker at %d, but worker was "
+                    "found at %d!", i, true_i);
+        }
+    }
+    bool hadWork =  m_remoteWorkerInFlight[i].size() > 0;
+    if (hadWork) {
+        Log(EWarn, "Dropped remote worker had work units that were not completed, rescheduling them!");
+        std::list<RemoteInFlightWork>::iterator it;
+        for (it = m_remoteWorkerInFlight[i].begin(); it != m_remoteWorkerInFlight[i].end(); ++it) {
+            int processId = it->processID;
+            const WorkUnit *wu = it->workUnit.get();
+            m_processes[m_idToProcess[processId]]->pushFailedWork(wu);
+            m_processes[m_idToProcess[processId]]->inflight--;
+        }
+
+        /* TODO: This is a hack, but just crash instead of hanging if we 
+         * are the only one left... */
+        for (it = m_remoteWorkerInFlight[i].begin(); it != m_remoteWorkerInFlight[i].end(); ++it) {
+            int processId = it->processID;
+            if (m_processes[m_idToProcess[processId]]->inflight == 0
+             || m_processes[m_idToProcess[processId]]->cancelled
+             || !m_processes[m_idToProcess[processId]]->active
+             || !m_processes[m_idToProcess[processId]]->stillgenerating) {
+                Log(EWarn, "!TODO! This worker seems to be the only one "
+                        "left in that process -- we're bailing out now, "
+                        "until we find a way to reliably get another worker "
+                        "to finish the job [instead of hanging!] !TODO!");
+                exit(1); // exit(1) because EError seems to hang too...
+            }
+
+        }
+    }
+    m_remoteWorkerInFlight.erase(i);
+    m_workers[i] = NULL;
+    if (hadWork)
+        /* TODO: Does not seem to work if all (other) workers are 
+         * 'finished' already... (hence forced crash above) */
+        m_workAvailable->broadcast();
 }
 
 Worker *Scheduler::getWorker(int index) {
@@ -82,6 +146,9 @@ Worker *Scheduler::getWorker(int index) {
     LockGuard lock(m_mutex);
     if (index < (int) m_workers.size()) {
         result = m_workers[index];
+        if (result == NULL) {
+            Log(EWarn, "Scheduler::getWorker() - requested a worker that was unregistered!");
+        }
     } else {
         Log(EError, "Scheduler::getWorker() - out of bounds");
     }
@@ -89,9 +156,11 @@ Worker *Scheduler::getWorker(int index) {
 }
 
 size_t Scheduler::getWorkerCount() const {
-    size_t count;
+    size_t count = 0;
     LockGuard lock(m_mutex); // make valgrind/helgrind happy
-    count = m_workers.size();
+    for (size_t i=0; i<m_workers.size(); ++i)
+        if (m_workers[i])
+            count++;
     return count;
 }
 
@@ -99,7 +168,7 @@ size_t Scheduler::getLocalWorkerCount() const {
     size_t count = 0;
     LockGuard lock(m_mutex);
     for (size_t i=0; i<m_workers.size(); ++i) {
-        if (m_workers[i]->getClass() == MTS_CLASS(LocalWorker))
+        if (m_workers[i] && m_workers[i]->getClass() == MTS_CLASS(LocalWorker))
             count++;
     }
     return count;
@@ -174,7 +243,8 @@ bool Scheduler::unregisterResource(int id) {
         m_resources.erase(id);
         delete rec;
         for (size_t i=0; i<m_workers.size(); ++i)
-            m_workers[i]->signalResourceExpiration(id);
+            if (m_workers[i])
+                m_workers[i]->signalResourceExpiration(id);
     }
     return true;
 }
@@ -255,7 +325,7 @@ bool Scheduler::schedule(ParallelProcess *process) {
 
     if (m_processes.find(process) != m_processes.end()) {
         ProcessRecord *rec = m_processes[process];
-        if (rec->morework && !rec->active) {
+        if (rec->hasMoreWork() && !rec->active) {
             /* Paused process - reactivate */
 #if defined(DEBUG_SCHED)
             Log(rec->logLevel, "Waking inactive process %i..", rec->id);
@@ -302,7 +372,8 @@ bool Scheduler::hasRemoteWorkers() const {
     bool hasRemoteWorkers = false;
     LockGuard lock(m_mutex);
     for (size_t i=0; i<m_workers.size(); ++i)
-        hasRemoteWorkers |= m_workers[i]->isRemoteWorker();
+        if (m_workers[i])
+            hasRemoteWorkers |= m_workers[i]->isRemoteWorker();
     return hasRemoteWorkers;
 }
 
@@ -310,7 +381,8 @@ bool Scheduler::hasLocalWorkers() const {
     bool hasLocalWorkers = false;
     LockGuard lock(m_mutex);
     for (size_t i=0; i<m_workers.size(); ++i)
-        hasLocalWorkers |= !m_workers[i]->isRemoteWorker();
+        if (m_workers[i])
+            hasLocalWorkers |= !m_workers[i]->isRemoteWorker();
     return hasLocalWorkers;
 }
 
@@ -376,7 +448,8 @@ bool Scheduler::cancel(ParallelProcess *process, bool reduceInflight) {
 #endif
 
     for (size_t i=0; i<m_workers.size(); ++i)
-        m_workers[i]->signalProcessCancellation(rec->id);
+        if (m_workers[i])
+            m_workers[i]->signalProcessCancellation(rec->id);
 
     /* Ensure that this process won't be scheduled again */
     m_localQueue.erase(std::remove(m_localQueue.begin(), m_localQueue.end(), rec->id),
@@ -386,7 +459,7 @@ bool Scheduler::cancel(ParallelProcess *process, bool reduceInflight) {
 
     /* Ensure that the process won't be considered 'done' when the
        last in-flight work unit is returned */
-    rec->morework = true;
+    rec->stillgenerating = true;
     rec->cancelled = true;
 
     /* Now wait until no more work from this process circulates and release
@@ -442,8 +515,8 @@ Scheduler::EStatus Scheduler::acquireWork(Item &item,
             return EStop;
         }
 
-        /* Try to create a work unit from the parallel
-           process currently on top of the queue */
+        /* Retry the failed work unit or try to create a work unit from the
+         * parallel process currently on top of the queue */
         ParallelProcess::EStatus wStatus;
         try {
             int id = queue.front();
@@ -453,8 +526,15 @@ Scheduler::EStatus Scheduler::acquireWork(Item &item,
                    work processor */
                 setProcessByID(item, id);
             }
+            item.local = local;
 
-            wStatus = item.proc->generateWork(item.workUnit, item.workerIndex);
+            /* Check if there is failed work that needs to be rescheduled */
+            if (item.rec->hasFailedWork()) {
+                item.workUnit->set(item.rec->popFailedWork().get());
+                wStatus = ParallelProcess::ESuccess;
+            } else {
+                wStatus = item.proc->generateWork(item.workUnit, item.workerIndex);
+            }
         } catch (const std::exception &ex) {
             Log(EWarn, "Caught an exception - canceling process %i: %s",
                 item.id, ex.what());
@@ -463,13 +543,21 @@ Scheduler::EStatus Scheduler::acquireWork(Item &item,
         }
 
         if (wStatus == ParallelProcess::ESuccess) {
+            if (!local) {
+                /* Store the work unit so we can recover from a remote end
+                 * failure by rescheduling the work. */
+                ref<WorkUnit> wuClone = item.wp->createWorkUnit();
+                wuClone->set(item.workUnit);
+                m_remoteWorkerInFlight[item.workerIndex].push_back(
+                        RemoteInFlightWork(item.id, wuClone.get()));
+            }
             break;
         } else if (wStatus == ParallelProcess::EFailure) {
 #if defined(DEBUG_SCHED)
-            if (item.rec->morework)
+            if (item.rec->hasMoreWork())
                 Log(item.rec->logLevel, "Process %i has finished generating work", item.rec->id);
 #endif
-            item.rec->morework = false;
+            item.rec->stillgenerating = false;
             item.rec->active = false;
             queue.pop_front();
             if (item.rec->inflight == 0)
@@ -500,7 +588,8 @@ void Scheduler::signalProcessTermination(ParallelProcess *proc, ProcessRecord *r
     Log(rec->logLevel, "Process %i is complete.", rec->id);
 #endif
     for (size_t i=0; i<m_workers.size(); ++i)
-        m_workers[i]->signalProcessTermination(rec->id);
+        if (m_workers[i])
+            m_workers[i]->signalProcessTermination(rec->id);
     /* The parallel process has been completed. Decrease the reference count
         of all used resources */
     const ParallelProcess::ResourceBindings &bindings = proc->getResourceBindings();
@@ -526,13 +615,15 @@ void Scheduler::start() {
     Log(EDebug, "Starting ..");
 #endif
     m_running = true;
-    if (m_workers.size() == 0)
+    if (getWorkerCount() == 0)
         Log(EError, "Cannot start the scheduler - there are no registered workers!");
 
     int coreIndex = 0;
     for (size_t i=0; i<m_workers.size(); ++i) {
-        m_workers[i]->start(this, (int) i, coreIndex);
-        coreIndex += (int) m_workers[i]->getCoreCount();
+        if (m_workers[i]) {
+            m_workers[i]->start(this, (int) i, coreIndex);
+            coreIndex += (int) m_workers[i]->getCoreCount();
+        }
     }
 }
 
@@ -548,10 +639,12 @@ void Scheduler::pause() {
     lock.unlock();
     /* Return when all of them have finished */
     for (size_t i=0; i<m_workers.size(); ++i)
-        m_workers[i]->join();
+        if (m_workers[i])
+            m_workers[i]->join();
     /* Decrement reference counts to any referenced objects */
     for (size_t i=0; i<m_workers.size(); ++i)
-        m_workers[i]->clear();
+        if (m_workers[i])
+            m_workers[i]->clear();
 }
 
 void Scheduler::stop() {
@@ -571,6 +664,7 @@ void Scheduler::stop() {
     m_idToProcess.clear();
     m_localQueue.clear();
     m_remoteQueue.clear();
+    m_remoteWorkerInFlight.clear();
     for (std::map<int, ResourceRecord *>::iterator
         it = m_resources.begin(); it != m_resources.end(); ++it) {
         ResourceRecord *rec = (*it).second;
@@ -585,7 +679,8 @@ size_t Scheduler::getCoreCount() const {
     size_t coreCount = 0;
     LockGuard lock(m_mutex);
     for (size_t i=0; i<m_workers.size(); ++i)
-        coreCount += m_workers[i]->getCoreCount();
+        if (m_workers[i])
+            coreCount += m_workers[i]->getCoreCount();
     return coreCount;
 }
 
@@ -679,12 +774,12 @@ void LocalWorker::signalProcessCancellation(int id) {
 
 
 /* ==================================================================== */
-/*                        Work unit implementations                    */
+/*                        Work unit implementations                     */
 /* ==================================================================== */
 
-void DummyWorkUnit::set(const WorkUnit *workUnit) { }
-void DummyWorkUnit::load(Stream *stream) { }
-void DummyWorkUnit::save(Stream *stream) const { }
+void DummyWorkUnit::set(const WorkUnit *workUnit) { WorkUnit::set(workUnit); }
+void DummyWorkUnit::load(Stream *stream) { WorkUnit::load(stream); }
+void DummyWorkUnit::save(Stream *stream) const { WorkUnit::save(stream); }
 std::string DummyWorkUnit::toString() const {
     return "DummyWorkUnit[]";
 }
