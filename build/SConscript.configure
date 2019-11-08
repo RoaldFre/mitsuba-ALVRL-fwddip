@@ -134,7 +134,6 @@ def CheckCXX(context):
         context.Result(ret)
         return ret
 
-conf = Configure(env, custom_tests = { 'CheckCXX' : CheckCXX })
 cppPathPrevious = SCons.Util.semi_deepcopy(env['CPPPATH'])
 libPathPrevious = SCons.Util.semi_deepcopy(env['LIBPATH'])
 cppFlagsPrevious = SCons.Util.semi_deepcopy(env['CPPFLAGS'])
@@ -170,6 +169,8 @@ if env.has_key('FFTWINCLUDE'):
         env.Prepend(CPPPATH=env['FFTWINCLUDE'])
 if env.has_key('FFTWLIBDIR'):
         env.Prepend(LIBPATH=env['FFTWLIBDIR'])
+
+conf = Configure(env, custom_tests = { 'CheckCXX' : CheckCXX })
 
 if not conf.CheckCXX():
         print('Could not compile a simple C++ fragment, verify that ' + \
