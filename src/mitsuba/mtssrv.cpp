@@ -245,42 +245,49 @@ int mtssrv(int argc, char **argv) {
             const std::string &hostName = hosts[i];
             ref<Stream> stream;
 
-            if (hostName.find("@") == std::string::npos) {
-                int port = MTS_DEFAULT_PORT;
-                std::vector<std::string> tokens = tokenize(hostName, ":");
-                if (tokens.size() == 0 || tokens.size() > 2) {
-                    SLog(EError, "Invalid host specification '%s'!", hostName.c_str());
-                } else if (tokens.size() == 2) {
-                    port = strtol(tokens[1].c_str(), &end_ptr, 10);
-                    if (*end_ptr != '\0')
-                        SLog(EError, "Invalid host specification '%s'!", hostName.c_str());
-                }
-                stream = new SocketStream(tokens[0], port);
-            } else {
-                std::string path = "~/mitsuba";
-                std::vector<std::string> tokens = tokenize(hostName, "@/:");
-                if (tokens.size() < 2 || tokens.size() > 3) {
-                    SLog(EError, "Invalid host specification '%s'!", hostName.c_str());
-                } else if (tokens.size() == 3) {
-                    path = tokens[2];
-                }
-                std::vector<std::string> cmdLine;
-                cmdLine.push_back(formatString("bash -c 'cd %s; . setpath.sh; mtssrv -ls'", path.c_str()));
-                stream = new SSHStream(tokens[0], tokens[1], cmdLine);
-            }
             try {
-                scheduler->registerWorker(new RemoteWorker(formatString("net%i", i), stream));
-            } catch (std::runtime_error &e) {
-                if (hostName.find("@") != std::string::npos) {
-#if defined(__WINDOWS__)
-                    SLog(EWarn, "Please ensure that passwordless authentication "
-                        "using plink.exe and pageant.exe is enabled (see the documentation for more information)");
-#else
-                    SLog(EWarn, "Please ensure that passwordless authentication "
-                        "is enabled (e.g. using ssh-agent - see the documentation for more information)");
-#endif
+                if (hostName.find("@") == std::string::npos) {
+                    int port = MTS_DEFAULT_PORT;
+                    std::vector<std::string> tokens = tokenize(hostName, ":");
+                    if (tokens.size() == 0 || tokens.size() > 2) {
+                        SLog(EError, "Invalid host specification '%s'!", hostName.c_str());
+                    } else if (tokens.size() == 2) {
+                        port = strtol(tokens[1].c_str(), &end_ptr, 10);
+                        if (*end_ptr != '\0')
+                            SLog(EError, "Invalid host specification '%s'!", hostName.c_str());
+                    }
+                    stream = new SocketStream(tokens[0], port);
+                } else {
+                    std::string path = "~/mitsuba";
+                    std::vector<std::string> tokens = tokenize(hostName, "@/:");
+                    if (tokens.size() < 2 || tokens.size() > 3) {
+                        SLog(EError, "Invalid host specification '%s'!", hostName.c_str());
+                    } else if (tokens.size() == 3) {
+                        path = tokens[2];
+                    }
+                    std::vector<std::string> cmdLine;
+                    cmdLine.push_back(formatString("bash -c 'cd %s; . setpath.sh; nice -n 19 mtssrv -ls'", path.c_str()));
+                    stream = new SSHStream(tokens[0], tokens[1], cmdLine);
                 }
-                throw e;
+                try {
+                    scheduler->registerWorker(new RemoteWorker(formatString("net%i", i), stream));
+                } catch (std::runtime_error &e) {
+                    if (hostName.find("@") != std::string::npos) {
+#if defined(__WINDOWS__)
+                        SLog(EWarn, "Please ensure that passwordless authentication "
+                            "using plink.exe and pageant.exe is enabled (see the documentation for more information)");
+#else
+                        SLog(EWarn, "Please ensure that passwordless authentication "
+                            "is enabled (e.g. using ssh-agent - see the documentation for more information)");
+#endif
+                    }
+                    //throw e;
+                    SLog(EWarn, "Could not connect to \"%s\". Error: \"%s\". "
+                            "Not adding this remote server.", hostName.c_str(), e.what());
+                }
+            } catch (std::exception &e) {
+                SLog(EWarn, "Could not connect to \"%s\". Error: \"%s\". "
+                        "Not adding this remote server.", hostName.c_str(), e.what());
             }
         }
         scheduler->start();
