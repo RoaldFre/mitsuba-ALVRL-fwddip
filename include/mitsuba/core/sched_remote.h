@@ -28,12 +28,12 @@
 
 /** How many work units should be sent to a remote worker
    at a time? This is a multiple of the worker's core count */
-#define MTS_BACKLOG_FACTOR 3
+#define MTS_BACKLOG_FACTOR 2 /* 3 */
 
 /** Once the back log factor drops below this value (also a
    multiple of the core size), the stream processor will
    continue sending batches of work units */
-#define MTS_CONTINUE_FACTOR 2
+#define MTS_CONTINUE_FACTOR 1 /* 2 */
 
 MTS_NAMESPACE_BEGIN
 
@@ -69,12 +69,26 @@ protected:
     virtual void signalResourceExpiration(int id);
     virtual void signalProcessCancellation(int id);
     virtual void signalProcessTermination(int id);
+    virtual void signalDropConnection();
     virtual void start(Scheduler *scheduler, int workerIndex, int coreOffset);
     void flush();
+    void dropRemoteConnection(bool connectionAlreadyDead);
 
     inline void signalCompletion() {
         LockGuard lock(m_mutex);
         m_inFlight--;
+        m_finishCond->signal();
+    }
+    inline void signalPong() {
+        LockGuard lock(m_mutex);
+        if (!m_waitingForPong) {
+            Log(EError, "Received unexpected pong message");
+        }
+        m_waitingForPong = false;
+    }
+    inline void signalDroppedConnection() {
+        LockGuard lock(m_mutex);
+        dropRemoteConnection(true);
         m_finishCond->signal();
     }
 protected:
@@ -83,6 +97,8 @@ protected:
     ref<MemoryStream> m_memStream;
     ref<Stream> m_stream;
     ref<RemoteWorkerReader> m_reader;
+    bool m_remoteConnectionDropped; /// Was the remote connection dropped? (only gets set by dropRemoteConnection())
+    bool m_waitingForPong; /// Are we waiting for a Pong in response to a Ping?
 
     /* List of processes and resources that are
        currently active at the remote node */
@@ -229,10 +245,13 @@ protected:
         ECancelledWorkResult,
         EProcessTerminated,
         EProcessCancelled,
+        EDropConnection,
         EEnsurePluginLoaded,
         EResourceExpired,
         EQuit,
         EIncompatible,
+        EPing,
+        EPong,
         EHello = 0x1bcd
     };
 
@@ -241,6 +260,7 @@ protected:
     virtual void run();
     void sendWorkResult(int id, const WorkResult *result, bool cancelled);
     void sendCancellation(int id, int numLost);
+    void sendPong();
 private:
     Scheduler *m_scheduler;
     std::string m_nodeName;

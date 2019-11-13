@@ -67,6 +67,7 @@ public:
 
     void process(const WorkUnit *workUnit, WorkResult *workResult,
         const bool &stop) {
+        WorkProcessor::process(workUnit, workResult, stop);
         const RectangularWorkUnit *rect = static_cast<const RectangularWorkUnit *>(workUnit);
         ImageBlock *block = static_cast<ImageBlock *>(workResult);
 

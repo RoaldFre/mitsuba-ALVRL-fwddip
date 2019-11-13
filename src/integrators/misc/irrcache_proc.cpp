@@ -75,6 +75,7 @@ public:
 
     void process(const WorkUnit *workUnit, WorkResult *workResult,
         const bool &stop) {
+        WorkProcessor::process(workUnit, workResult, stop);
         const RectangularWorkUnit *rect = static_cast<const RectangularWorkUnit *>(workUnit);
         IrradianceRecordVector *result = static_cast<IrradianceRecordVector *>(workResult);
         const SamplingIntegrator *integrator = m_subIntegrator.get();
@@ -153,6 +154,7 @@ private:
 };
 
 void IrradianceRecordVector::load(Stream *stream) {
+    WorkResult::load(stream);
     clear();
     size_t count = stream->readUInt();
     m_samples.resize(count);
@@ -165,6 +167,7 @@ IrradianceRecordVector::~IrradianceRecordVector() {
 }
 
 void IrradianceRecordVector::save(Stream *stream) const {
+    WorkResult::save(stream);
     stream->writeUInt((unsigned int) m_samples.size());
     for (size_t i=0; i<m_samples.size(); ++i)
         m_samples[i]->serialize(stream);
