@@ -61,6 +61,11 @@ public:
         cout << "                  frames of an animation using the '-p' option to avoid flicker" << endl << endl;
         cout << "   -o file        Save the output with a given filename" << endl << endl;
         cout << "   -t             Multithreaded: process several files in parallel" << endl << endl;
+        cout << "   -M             Merge all images into one final, averaged image" << endl << endl;
+        cout << "   -R fraction    Robustness fraction: when merging images with -M, discard" << endl;
+        cout << "                  this fraction of extremal values (e.g. -R 0.05 discards the" << endl;
+        cout << "                  5\% lowest and 5\% highest samples of the given files to merge)" << endl << endl;
+        cout << "   -n             Don't produce a LDR tonemapped image, useful for combined use with -M" << endl << endl;
         cout << " The operations are ordered as follows: 1. crop, 2. bloom, 3. resize, 4. color" << endl;
         cout << " balance, 5. tonemap, 6. annotate. To simply process a directory full of EXRs" << endl;
         cout << " in parallel, run the following: 'mtsutil tonemap -t path-to-directory/*.exr'" << endl;
@@ -130,9 +135,12 @@ public:
         ReconstructionFilter *rfilter = NULL;
         Float bloomFov = 0;
         std::string rfilterName = "lanczos";
+        bool merge = false;
+        bool noLDR = false;
+        Float robustFraction = 0;
 
         /* Parse command-line arguments */
-        while ((optchar = getopt(argc, argv, "htxag:m:f:r:b:c:o:p:s:B:F:")) != -1) {
+        while ((optchar = getopt(argc, argv, "htMR:xag:m:f:r:b:c:o:p:s:B:F:n")) != -1) {
             switch (optchar) {
                 case 'h': {
                         help();
@@ -257,6 +265,24 @@ public:
                 case 't':
                     runParallel = true;
                     break;
+
+                case 'M':
+                    merge = true;
+                    break;
+
+                case 'R':
+                    robustFraction = (Float) strtod(optarg, &end_ptr);
+                    if (*end_ptr != '\0')
+                        SLog(EError, "Could not parse the Robust fraction value!");
+                    if (robustFraction >= 0.5)
+                        SLog(EError, "Robust fraction >= 0.5 will drop "
+                                "everything! (parsed value: %f)",
+                                robustFraction);
+                    break;
+
+                case 'n':
+                    noLDR = true;
+                    break;
             }
         }
 
@@ -264,7 +290,7 @@ public:
             Log(EError, "Bloom field of view value must be between 0 and 180!");
 
         if (runParallel) {
-            if (outputFilename != "" || temporalCoherence) {
+            if (outputFilename != "" || temporalCoherence || merge) {
                 Log(EWarn, "Requested multithreaded tonemapping along with incompatible options, disabling threading..");
                 runParallel = false;
             } else {
@@ -365,6 +391,170 @@ public:
                 Log(EWarn, "The tonemapping worker threads encountered several issues:");
                 for (size_t i=0; i<messages.size(); ++i)
                     Log(EWarn, "Exception %i: %s", (int) i, messages[i].c_str());
+            }
+        } else if (merge) {
+            if (outputFilename == "") {
+                Log(EError, "When merging images, an explicit output file is required!");
+            }
+            ref<Bitmap> bloomFilter;
+
+            size_t n = 0;
+            fs::path inputFile;
+            ref<FileStream> is;
+            ref<Bitmap> input;
+            Bitmap::EComponentFormat originalComponentFormat;
+            // Load first image that we can as base (ignore errors)
+            do {
+                try {
+                    inputFile = fileResolver->resolve(argv[optind]);
+                    Log(EInfo, "Loading image \"%s\" ..", inputFile.string().c_str());
+                    is = new FileStream(inputFile, FileStream::EReadOnly);
+                    input = new Bitmap(Bitmap::EAuto, is);
+                } catch (const std::exception &e) {
+                    Log(EWarn, "Problem loading file \"%s\".", inputFile.string().c_str());
+                    Log(EWarn, "Error was: %s.", e.what());
+                    continue;
+                }
+                n++;
+                originalComponentFormat = input->getComponentFormat();
+            } while (n == 0);
+            // make sure we don't lose precision in accumulation -> convert to doubles
+            input = input->convert(input->getPixelFormat(), Bitmap::EFloat64);
+
+
+            
+            if (robustFraction == 0) {
+                /* Nothing special requested, can just accumulate */
+                for (int i=optind+1; i<argc; ++i) {
+                    inputFile = fileResolver->resolve(argv[i]);
+                    Log(EInfo, "Loading image \"%s\" ..", inputFile.string().c_str());
+                    ref<Bitmap> thisInput;
+                    try {
+                        is = new FileStream(inputFile, FileStream::EReadOnly);
+                        thisInput = new Bitmap(Bitmap::EAuto, is);
+                        thisInput = thisInput->convert(thisInput->getPixelFormat(), Bitmap::EFloat64);
+                    } catch (const std::exception &e) {
+                        Log(EWarn, "Problem loading file \"%s\".", inputFile.string().c_str());
+                        Log(EWarn, "Error was: %s.", e.what());
+                        continue;
+                    }
+                    n++;
+                    input->accumulate(thisInput.get());
+                }
+                input->scale(1.0/n);
+            } else {
+                /* Robust merging requested */
+
+                /* Memory is cheap: get everything in-mem */
+                std::vector<ref<Bitmap> > bitmaps;
+                for (int i=optind; i<argc; ++i) {
+                    inputFile = fileResolver->resolve(argv[i]);
+                    Log(EInfo, "Loading image \"%s\" ..", inputFile.string().c_str());
+                    try {
+                        is = new FileStream(inputFile, FileStream::EReadOnly);
+                        ref<Bitmap> thisInput = new Bitmap(Bitmap::EAuto, is);
+                        thisInput = thisInput->convert(thisInput->getPixelFormat(), Bitmap::EFloat64);
+                        bitmaps.push_back(thisInput);
+                    } catch (const std::exception &e) {
+                        Log(EWarn, "Problem loading file \"%s\".", inputFile.string().c_str());
+                        Log(EWarn, "Error was: %s.", e.what());
+                        continue;
+                    }
+                }
+                size_t numBitmaps = bitmaps.size();
+                size_t numToDrop;
+                if (numBitmaps < 3) {
+                    Log(EWarn, "Requested robust merging, but could not "
+                            "load at least 3 bitmaps! (loaded %d bitmaps)! "
+                            "WILL NOT DROP ANY OUTLIERS!",
+                            numBitmaps);
+                    numToDrop = 0;
+                } else {
+                    numToDrop = std::max((size_t)1,(size_t)(0.5 + numBitmaps * robustFraction));
+                    Assert(numToDrop <= numBitmaps/2);
+                }
+                if (numToDrop == numBitmaps/2  &&  numToDrop >= 1)
+                    numToDrop--;
+                Log(EInfo, "Requested robust merging: dropping %d lowest and %d highest samples out of %d",
+                        numToDrop, numToDrop, numBitmaps);
+
+                size_t nEntries =
+                    (size_t) input->getSize().x *
+                    (size_t) input->getSize().y *
+                    input->getChannelCount();
+
+                std::vector<double> samples(numBitmaps);
+                for (size_t i=0; i<nEntries; ++i) {
+                    for (size_t b=0; b<numBitmaps; b++)
+                        samples[b] = bitmaps[b]->getFloat64Data()[i];
+                    std::sort(samples.begin(), samples.end()); // note: full sort is overkill...
+                    double avg = 0;
+                    for (size_t j = numToDrop; j < numBitmaps-numToDrop; j++) {
+                        avg += samples[j];
+                    }
+                    avg = avg / (numBitmaps - 2*numToDrop);
+
+                    input->getFloat64Data()[i] = avg; // original input gets overwritten
+                }
+            }
+
+
+            ref<Bitmap> outputExr = input->convert(pixelFormat, originalComponentFormat);
+            fs::path exrOutputFile = outputFilename;
+            exrOutputFile.replace_extension(".exr");
+            Log(EInfo, "Writing merged image to \"%s\" ..", exrOutputFile.string().c_str());
+            ref<FileStream> exros = new FileStream(exrOutputFile, FileStream::ETruncReadWrite);
+            outputExr->write(Bitmap::EOpenEXR, exros);
+
+
+            if (!noLDR) {
+                if (crop[2] != -1 && crop[3] != -1)
+                    input = input->crop(Point2i(crop[0], crop[1]), Vector2i(crop[2], crop[3]));
+
+                if (bloomFov != 0) {
+                    int maxDim = std::max(input->getWidth(), input->getHeight());
+                    if (maxDim % 2 == 0)
+                        ++maxDim;
+
+                    if (bloomFilter == NULL || bloomFilter->getWidth() != maxDim)
+                        bloomFilter = computeBloomFilter(maxDim, bloomFov);
+
+                    if (input->getComponentFormat() != Bitmap::EFloat)
+                        input = input->convert(input->getPixelFormat(), Bitmap::EFloat);
+
+                    Log(EInfo, "Convolving image with bloom filter ..");
+                    input->convolve(bloomFilter);
+                }
+
+                if (resize[0] != -1)
+                    input = input->resample(rfilter, ReconstructionFilter::EClamp,
+                        ReconstructionFilter::EClamp, Vector2i(resize[0], resize[1]));
+
+                if (cbal[0] != 1 || cbal[1] != 1 || cbal[2] != 1)
+                    input->colorBalance(cbal[0], cbal[1], cbal[2]);
+
+                if (tonemapper[0] != -1) {
+                    input->tonemapReinhard(logAvgLuminance, maxLuminance, tonemapper[0], tonemapper[1]);
+                    Log(EInfo, "Tonemapper reports: log-average luminance = %f, max. luminance = %f",
+                        logAvgLuminance, maxLuminance);
+                    if (!temporalCoherence) {
+                        logAvgLuminance = 0;
+                        maxLuminance = 0;
+                    }
+                }
+
+                ref<Bitmap> output = input->convert(pixelFormat, Bitmap::EUInt8, gamma, multiplier);
+
+                for (size_t i=0; i<rects.size(); ++i) {
+                    int *r = rects[i].r;
+                    output->drawRect(Point2i(r[0], r[1]), Vector2i(r[2], r[3]), Spectrum(r[4]/255.0f));
+                }
+
+                fs::path outputFile = outputFilename;
+                Log(EInfo, "Writing tonemapped image to \"%s\" ..", outputFile.string().c_str());
+
+                ref<FileStream> os = new FileStream(outputFile, FileStream::ETruncReadWrite);
+                output->write(format, os);
             }
         } else {
             ref<Bitmap> bloomFilter;
