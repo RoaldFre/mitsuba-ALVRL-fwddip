@@ -229,6 +229,7 @@ private:
     ref<Mutex> m_resultMutex;
     ProgressReporter *m_progress;
     AABB m_aabb;
+    size_t m_uniqueID;
 };
 
 MTS_NAMESPACE_END

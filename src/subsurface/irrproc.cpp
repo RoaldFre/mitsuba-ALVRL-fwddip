@@ -60,6 +60,7 @@ public:
 
     void process(const WorkUnit *workUnit, WorkResult *workResult,
         const bool &stop) {
+        WorkProcessor::process(workUnit, workResult, stop);
         const PositionSampleVector &positions = *static_cast<const PositionSampleVector *>(workUnit);
         IrradianceSampleVector *result = static_cast<IrradianceSampleVector *>(workResult);
         const SamplingIntegrator *integrator = m_integrator.get();
@@ -101,6 +102,7 @@ private:
 };
 
 void PositionSampleVector::load(Stream *stream) {
+    WorkUnit::load(stream);
     clear();
     size_t count = stream->readSize();
     m_samples.resize(count);
@@ -109,12 +111,14 @@ void PositionSampleVector::load(Stream *stream) {
 }
 
 void PositionSampleVector::save(Stream *stream) const {
+    WorkUnit::save(stream);
     stream->writeSize(m_samples.size());
     for (size_t i=0; i<m_samples.size(); ++i)
         m_samples[i].serialize(stream);
 }
 
 void PositionSampleVector::set(const WorkUnit *workUnit) {
+    WorkUnit::set(workUnit);
     m_samples = ((PositionSampleVector *) workUnit)->m_samples;
 }
 
@@ -126,6 +130,7 @@ std::string PositionSampleVector::toString() const {
 }
 
 void IrradianceSampleVector::load(Stream *stream) {
+    WorkResult::load(stream);
     clear();
     size_t count = stream->readSize();
     m_samples.resize(count);
@@ -134,6 +139,7 @@ void IrradianceSampleVector::load(Stream *stream) {
 }
 
 void IrradianceSampleVector::save(Stream *stream) const {
+    WorkResult::save(stream);
     stream->writeSize(m_samples.size());
     for (size_t i=0; i<m_samples.size(); ++i)
         m_samples[i].serialize(stream);
@@ -155,6 +161,7 @@ IrradianceSamplingProcess::IrradianceSamplingProcess(PositionSampleVector *posit
     m_irradianceSamples = new IrradianceSampleVector();
     m_irradianceSamples->reserve(positions->size());
     m_samplesRequested = 0;
+    m_uniqueID = 0;
     m_progress = new ProgressReporter("Sampling irradiance", positions->size(), data);
 }
 
@@ -182,6 +189,7 @@ ParallelProcess::EStatus IrradianceSamplingProcess::generateWork(WorkUnit *unit,
             source.begin() + m_samplesRequested,
             source.begin() + m_samplesRequested + workSize);
     m_samplesRequested += workSize;
+    unit->setUniqueID(m_uniqueID++);
 
     return ESuccess;
 }

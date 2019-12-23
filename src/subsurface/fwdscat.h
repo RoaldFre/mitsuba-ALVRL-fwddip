@@ -21,8 +21,12 @@ class MTS_EXPORT FwdScat : public Object {
 public:
     MTS_DECLARE_CLASS();
 
-    FwdScat(Float g, Float sigma_s, Float sigma_a, Float eta) :
-                mu(1 - g), sigma_s(sigma_s), sigma_a(sigma_a), m_eta(eta) {
+    FwdScat(Float g, Float sigmaS, Float sigmaA, Float eta) :
+                mu(1 - g),
+                sigma_s(sigmaS),
+                sigma_a(sigmaA),
+                p(0.5 * sigmaS * (1 - g)),
+                m_eta(eta) {
         if (g < 0 || g >= 1) {
             Log(EError, "Valid values for g are in [0,1). "
                     "Sensible values are close to 1.");
@@ -34,6 +38,7 @@ public:
         oss << "FwdScat[mu="<<mu
                 <<", sigma_s="<<sigma_s
                 <<", sigma_a="<<sigma_a
+                <<", p="<<p
                 <<", eta="<<m_eta
                 <<"]";
         return oss.str();
@@ -184,6 +189,7 @@ protected:
     const Float mu; /// Gaussian angle phase function standard deviation
     const Float sigma_s; /// Scattering coefficient of medium
     const Float sigma_a; /// Absorption coefficient of medium
+    const Float p;  /// Inverse length scale of forward scattering model
 
     /**
      * Bit of a hack for index-MISmatched dipole configurations. This makes

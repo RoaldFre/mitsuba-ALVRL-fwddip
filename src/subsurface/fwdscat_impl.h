@@ -56,7 +56,6 @@ FINLINE Float roundCosThetaForStability(Float cosTheta,
 }
 
 FINLINE double FwdScat::absorptionAndNormalizationConstant(Float theLength) const {
-    const double p = 0.5 * sigma_s * mu;
     const double ps = p * theLength;
 
     double result;
@@ -107,7 +106,6 @@ FINLINE void FwdScat::calcValues(double length, double &C, double &D,
     FSAssert(sigma_s > 0);
     FSAssert(length >= 0);
 
-    double p = 0.5 * mu * sigma_s;
     double s = length;
     double ps = p*s;
     double ps2 = ps*ps;
@@ -615,7 +613,6 @@ FINLINE void FwdScat::implLengthShortLimit(
 
 FINLINE void FwdScat::implLengthShortLimitKnownU0(
         Vector R, Vector u0, Vector uL, Float &s, Sampler *sampler, Float *pdf) const {
-    double p = 0.5*sigma_s*mu;
     double lRl = R.length();
     double r = lRl * p;
     if (r == 0)  {
@@ -750,7 +747,6 @@ FINLINE void FwdScat::implLengthShortLimitMargOverU0(
 FINLINE void FwdScat::implLengthShortLimitMargOverU0_internal(
         Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf, Float safetyFac) const {
     // Working in p=1, transforming back at the end
-    Float p = 0.5*sigma_s*mu;
     Float lRl = R.length();
     Float r = lRl * p;
     Float r2 = r*r;
@@ -882,7 +878,6 @@ FINLINE void FwdScat::implLengthShortLimitMargOverU0_internal(
 // TODO: approximation that does not require a numerical cdf inversion?
 FINLINE Float FwdScat::sampleLengthLongLimit(
         Vector R, Vector uL, Float &s, Sampler *sampler) const {
-    Float p = 0.5*sigma_s*mu;
     if (p == 0)
         return 0;
     Vector R_p1 = R*p;
@@ -970,7 +965,6 @@ FINLINE Float FwdScat::sampleLengthLongLimit(
 
 FINLINE Float FwdScat::pdfLengthLongLimit(
         Vector R, Vector uL, Float s) const {
-    Float p = 0.5*sigma_s*mu;
     if (p == 0)
         return 0;
     Float s_p1 = s * p;
