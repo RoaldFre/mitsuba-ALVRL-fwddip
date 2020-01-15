@@ -17,7 +17,7 @@ MTS_NAMESPACE_BEGIN
 #endif
 
 
-class MTS_EXPORT FwdScat : public Object {
+class MTS_EXPORT FwdScat final : public Object {
 public:
     MTS_DECLARE_CLASS();
 

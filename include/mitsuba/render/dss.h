@@ -275,7 +275,7 @@ protected:
 };
 
 // channel can be -1 (= MIS over all channels)
-class MTS_EXPORT_RENDER MISIntersectionSampler : public IntersectionSampler {
+class MTS_EXPORT_RENDER MISIntersectionSampler final : public IntersectionSampler {
 public:
     MISIntersectionSampler(const std::vector<std::pair<Float, const IntersectionSampler*> > &samplers) :
             IntersectionSampler(0.0f) {
@@ -346,7 +346,7 @@ protected:
 typedef std::function<Float(const Intersection&, const Intersection&, const Vector&, int)> IntersectionWeightFunc;
 
 // channel can be -1 (= MIS over all channels)
-class MTS_EXPORT_RENDER WeightIntersectionSampler : public IntersectionSampler {
+class MTS_EXPORT_RENDER WeightIntersectionSampler final : public IntersectionSampler {
 public:
     WeightIntersectionSampler(IntersectionWeightFunc intersectionWeight,
             Float itsDistanceCutoff) :
@@ -455,7 +455,7 @@ protected:
     virtual ~TangentSampler2D() { }
 };
 
-class MTS_EXPORT_RENDER MISTangentSampler2D : public TangentSampler2D {
+class MTS_EXPORT_RENDER MISTangentSampler2D final : public TangentSampler2D {
 public:
     MISTangentSampler2D(const std::vector<std::pair<Float, const TangentSampler2D*> > &samplers) {
         if (samplers.size() < 1)
@@ -506,7 +506,7 @@ protected:
 
 
 
-class MTS_EXPORT_RENDER RadialSampler2D : public TangentSampler2D {
+class MTS_EXPORT_RENDER RadialSampler2D final : public TangentSampler2D {
 public:
     RadialSampler2D(const Sampler1D* radialSampler)
             : m_radialSampler(radialSampler) { }
@@ -543,7 +543,7 @@ protected:
 /**
  * \brief Exponential distribution.
  */
-class MTS_EXPORT_RENDER ExpSampler1D : public Sampler1D {
+class MTS_EXPORT_RENDER ExpSampler1D final : public Sampler1D {
 public:
     ExpSampler1D(const Spectrum &lambda) : m_lambda(lambda) { }
     virtual bool sample(int channel, Float &x, Sampler *sampler,
@@ -573,7 +573,7 @@ protected:
  * Uses the sampling method from Mertens et al, 'Efficient Rendering of
  * Local Subsurface Scattering' (2005).
  */
-class MTS_EXPORT_RENDER RadialExactDipoleSampler2D : public Sampler1D {
+class MTS_EXPORT_RENDER RadialExactDipoleSampler2D final : public Sampler1D {
 public:
     RadialExactDipoleSampler2D(const Spectrum &sigmaA,
             const Spectrum &sigmaS, const Spectrum &g, Float eta);
@@ -614,7 +614,7 @@ protected:
     virtual ~SurfaceSampler() { };
 };
 
-class MTS_EXPORT_RENDER UniformSurfaceSampler : public SurfaceSampler {
+class MTS_EXPORT_RENDER UniformSurfaceSampler final : public SurfaceSampler {
 public:
     UniformSurfaceSampler() { }
     virtual Float sample(const Intersection &its,
@@ -635,7 +635,7 @@ protected:
 
 /** \brief Sets the incoming point to the outgoing point, as in the case of
  * a BRDF. */
-class MTS_EXPORT_RENDER BRDFDeltaSurfaceSampler : public SurfaceSampler {
+class MTS_EXPORT_RENDER BRDFDeltaSurfaceSampler final : public SurfaceSampler {
 public:
     BRDFDeltaSurfaceSampler() { }
     virtual Float sample(const Intersection &its,
@@ -657,7 +657,7 @@ protected:
 /**
  * \brief SurfaceSampler that works by sampling a point in a 2D plane and
  * then projecting orthogonally to the surface. */
-class MTS_EXPORT_RENDER ProjSurfaceSampler : public SurfaceSampler {
+class MTS_EXPORT_RENDER ProjSurfaceSampler final : public SurfaceSampler {
 public:
     ProjSurfaceSampler(DSSProjFrame projFrame,
             const TangentSampler2D *planeSampler,
@@ -729,7 +729,7 @@ public:
      *
      * \return The pdf in area measure.
      */
-    virtual Float samplePointOnSurface(const Intersection &its,
+    Float samplePointOnSurface(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const {
@@ -756,7 +756,7 @@ public:
         return p;
     }
 
-    virtual Float pdfPointOnSurface(const Intersection &its,
+    Float pdfPointOnSurface(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             const Intersection &newIts, const Spectrum &throughput) const {
         if (!m_allowIncomingOutgoingDirections)

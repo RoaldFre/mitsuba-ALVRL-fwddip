@@ -59,7 +59,7 @@ static inline Float logDivergenceSampler_pdf(Float x) {
 }
 
 
-class MTS_EXPORT_RENDER FwdDipSmallLengthRadialSampler2D : public Sampler1D {
+class MTS_EXPORT_RENDER FwdDipSmallLengthRadialSampler2D final : public Sampler1D {
 public:
     FwdDipSmallLengthRadialSampler2D(Spectrum sigma_s, Spectrum g) :
         m_p(0.5*sigma_s*(Spectrum(1.0f) - g)) { }
@@ -97,7 +97,7 @@ protected:
  * \brief Sampler in the 2D plane perpendicular to the outgoing direction,
  * i.e. with the projection along the outgoing direction.
  */
-class MTS_EXPORT_RENDER FwdDipSmallLengthSamplerPerpToDir : public TangentSampler2D {
+class MTS_EXPORT_RENDER FwdDipSmallLengthSamplerPerpToDir final : public TangentSampler2D {
 public:
     FwdDipSmallLengthSamplerPerpToDir(Spectrum sigma_s, Spectrum g,
             Float pSafetyFactor = DEFAULT_P_SAFETY_FACTOR) :
@@ -167,7 +167,7 @@ protected:
 /*
  * Sampler in a plane that contains the outgoing direction
  */
-class MTS_EXPORT_RENDER FwdDipSmallLengthSamplerAlongDir : public TangentSampler2D {
+class MTS_EXPORT_RENDER FwdDipSmallLengthSamplerAlongDir final : public TangentSampler2D {
 public:
     FwdDipSmallLengthSamplerAlongDir(Spectrum sigma_s, Spectrum g,
             Float pSafetyFactor = DEFAULT_P_SAFETY_FACTOR) :
@@ -334,7 +334,7 @@ inline IntersectionWeightFunc fwdDipSmallLengthWeightFunc(
     };
 }
 
-class MTS_EXPORT_RENDER RayDirectionSurfaceSampler : public SurfaceSampler {
+class MTS_EXPORT_RENDER RayDirectionSurfaceSampler final : public SurfaceSampler {
 public:
     RayDirectionSurfaceSampler(const Spectrum &sigmaTr, const Spectrum &p,
             Float retreatFactor, const IntersectionSampler *itsSampler)
@@ -943,7 +943,7 @@ protected:
  * be worthwile to increase \c numSIR to obtain better estimates of the
  * subsurface contribution per ray.
  */
-class MTS_EXPORT_RENDER FwdDip : public DirectSamplingSubsurface {
+class MTS_EXPORT_RENDER FwdDip final : public DirectSamplingSubsurface {
 public:
     FwdDip(const Properties &props)
         : DirectSamplingSubsurface(props) {
