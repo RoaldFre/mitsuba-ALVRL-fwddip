@@ -290,7 +290,7 @@ public:
             m_sigmaA(stream),
             m_g(stream) {
         m_dipoles.resize(stream->readSize());
-        for (int i = 0; i < m_dipoles.size(); i++) {
+        for (size_t i = 0; i < m_dipoles.size(); i++) {
             Log(EInfo, "Unserializing DipMod %d",i);
             m_dipoles[i] = new DipMod(stream, manager);
         }
@@ -309,17 +309,47 @@ public:
         }
     }
 
-    size_t individualExtraParamSize() const {
+    /** 
+     * The extra parameters are stored in memory in an array of packets of the form:
+     *    struct ExtraParamPacket {
+     *        char individualExtraParamData[individualExtraParamSize()];
+     *        bool isValid; // Was the sampling of these parameters successful?
+     *    };
+     * There is one such packet for each spectral channel.
+     */
+    inline size_t individualExtraParamSize() const {
         return m_dipoles[0]->extraParamsSize();
     }
-    size_t extraParamsSize() const final {
-        return SPECTRUM_SAMPLES * individualExtraParamSize();
+    inline size_t extraParamsPacketSize() const {
+        return individualExtraParamSize() + sizeof(bool);
     }
+    inline size_t extraParamsSize() const {
+        return SPECTRUM_SAMPLES * extraParamsPacketSize();
+    }
+    /// const version
+    inline const void *getIndividualExtraParams(const void *extraParams, int i) const {
+        return static_cast<const char*>(extraParams) + i*extraParamsPacketSize();
+    }
+    /// non-const version
+    inline void *getIndividualExtraParams(void *extraParams, int i) const {
+        return static_cast<char*>(extraParams) + i*extraParamsPacketSize();
+    }
+    inline bool isValidExtraParam(const void *extraParams, int i) const {
+        const char *packet = static_cast<const char*>(extraParams)
+                    + i*extraParamsPacketSize();
+        return *reinterpret_cast<const bool*>(packet + individualExtraParamSize());
+    }
+    inline void setValidExtraParam(void *extraParams, int i, bool isValid) const {
+        char *packet = static_cast<char*>(extraParams)
+                    + i*extraParamsPacketSize();
+        *reinterpret_cast<bool*>(packet + individualExtraParamSize()) = isValid;
+    }
+
 
     inline virtual Spectrum bssrdf(const Scene *scene,
             const Point &p_in,  const Vector &d_in,  const Normal &n_in,
             const Point &p_out, const Vector &d_out, const Normal &n_out,
-            const void *extraParams) const final {
+            const void *extraParams) const {
         Assert(MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR || dot(d_in, n_in) <= 0);
         Assert(m_allowIncomingOutgoingDirections || dot(d_out, n_out) >= 0);
         Spectrum result;
@@ -329,10 +359,15 @@ public:
                 result[i] = result[0];
                 continue;
             }
+            if (!isValidExtraParam(extraParams, i)) {
+                result[i] = 0;
+                continue;
+            }
 
+            const void *myExtraParams = getIndividualExtraParams(extraParams, i);
             result[i] = m_dipoles[i]->evalDipole(
                     n_in, d_in, n_out, d_out, p_out - p_in,
-                    extraParams, m_dipConf);
+                    myExtraParams, m_dipConf);
         }
         return result;
     }
@@ -341,7 +376,7 @@ public:
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector *d_in,
             const Spectrum &throughput, void *extraParams,
-            Sampler *sampler) const final {
+            Sampler *sampler) const {
         Vector n_in = its_in.shFrame.n;
         Vector n_out = its_out.shFrame.n;
         Point p_in = its_in.p;
@@ -351,23 +386,24 @@ public:
         Assert(!d_in || dot(*d_in, n_in) <= Epsilon);
         Assert(!m_dipConf.useEffectiveBRDF || n_in == n_out);
         Assert(!m_dipConf.useEffectiveBRDF || p_in == p_out);
+        Assert(!throughput.isZero());
 
         Spectrum pdf;
         if (m_dipoles.size() == 1) {
             Assert(throughput[0] != 0);
             pdf = Spectrum(m_dipoles[0]->sampleExtraParamsDipole(
                     n_in, d_in, n_out, d_out, R, extraParams, m_dipConf, sampler));
+            setValidExtraParam(extraParams, 0, pdf[0] != 0);
         } else {
             for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
                 if (throughput[i] == 0) {
                     pdf[i] = 0;
                 } else {
-                    void *myExtraParams =
-                            static_cast<char*>(extraParams)
-                                + i*individualExtraParamSize();
+                    void *myExtraParams = getIndividualExtraParams(extraParams, i);
                     pdf[i] = m_dipoles[i]->sampleExtraParamsDipole(
                             n_in, d_in, n_out, d_out, R, myExtraParams, m_dipConf, sampler);
                 }
+                setValidExtraParam(extraParams, i, pdf[i] != 0);
             }
         }
 
@@ -388,7 +424,7 @@ public:
     virtual Spectrum pdfExtraParams(const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector *d_in,
-            const Spectrum &throughput, const void *extraParams) const final {
+            const Spectrum &throughput, const void *extraParams) const {
         Vector n_in = its_in.shFrame.n;
         Vector n_out = its_out.shFrame.n;
         Point p_in = its_in.p;
@@ -409,9 +445,7 @@ public:
                 if (throughput[i] == 0) {
                     pdf[i] = 0;
                 } else {
-                    const void *myExtraParams =
-                            static_cast<const char*>(extraParams)
-                                + i*individualExtraParamSize();
+                    const void *myExtraParams = getIndividualExtraParams(extraParams, i);
                     pdf[i] = m_dipoles[i]->pdfExtraParamsDipole(
                             n_in, d_in, n_out, d_out, R, myExtraParams, m_dipConf);
                 }
@@ -430,7 +464,7 @@ public:
             const Intersection &its_out, const Vector &d_out,
             Intersection &its_in,        Vector       &d_in,
             const void *extraParams, const Spectrum &throughput,
-            Sampler *sampler) const final {
+            Sampler *sampler) const {
         Float pdfHemi, pdfImp;
         if (m_dirHemiWeight == 1 || sampler->next1D() < m_dirHemiWeight) {
             // Default implementation does cosine hemisphere sampling
@@ -468,7 +502,7 @@ public:
     virtual Float pdfBssrdfDirection(const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector &d_in,
-            const void *extraParams, const Spectrum &throughput) const final {
+            const void *extraParams, const Spectrum &throughput) const {
 #if !MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
         Assert(-dot(d_in, its_in.shFrame.n) >= 0);
 #endif
@@ -496,7 +530,7 @@ public:
             const Intersection &its_out, const Vector &d_out,
             Intersection &its_in,        Vector       &d_in,
             const void *extraParams, const Spectrum &throughput,
-            Sampler *sampler) const final {
+            Sampler *sampler) const {
         Vector n_in = its_in.shFrame.n;
         Vector n_out = its_out.shFrame.n;
         Point p_in = its_in.p;
@@ -505,6 +539,7 @@ public:
         Assert(dot(d_out, n_out) >= -Epsilon);
         Assert(!m_dipConf.useEffectiveBRDF || n_in == n_out);
         Assert(!m_dipConf.useEffectiveBRDF || p_in == p_out);
+        Assert(!throughput.isZero());
 
         Float pdf;
         if (m_dipoles.size() == 1) {
@@ -516,8 +551,7 @@ public:
         } else {
             /* Only consider nonzero throughput channels */
             int i = throughput.sampleNonZeroChannelUniform(sampler);
-            const void *myExtraParams = static_cast<const char*>(extraParams)
-                                        + i*individualExtraParamSize();
+            const void *myExtraParams = getIndividualExtraParams(extraParams, i);
             pdf = m_dipoles[i]->sampleDirectionDipole(
                     n_in, d_in, n_out, d_out, R,
                     myExtraParams, m_dipConf, sampler);
@@ -527,8 +561,7 @@ public:
             for (int j = 0; j < SPECTRUM_SAMPLES; j++) {
                 if (j == i || throughput[j] == 0)
                     continue;
-                myExtraParams = static_cast<const char*>(extraParams)
-                                    + j*individualExtraParamSize();
+                const void *myExtraParams = getIndividualExtraParams(extraParams, j);
                 pdf += m_dipoles[j]->pdfDirectionDipole(
                         n_in, d_in, n_out, d_out, R,
                         myExtraParams, m_dipConf);
@@ -544,7 +577,7 @@ public:
     virtual Float pdfDirectionImportance(const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector &d_in,
-            const void *extraParams, const Spectrum &throughput) const final {
+            const void *extraParams, const Spectrum &throughput) const {
         Vector n_in = its_in.shFrame.n;
         Vector n_out = its_out.shFrame.n;
         Point p_in = its_in.p;
@@ -554,19 +587,18 @@ public:
         Assert(dot(d_in, n_in) <= Epsilon);
         Assert(!m_dipConf.useEffectiveBRDF || n_in == n_out);
         Assert(!m_dipConf.useEffectiveBRDF || p_in == p_out);
+        Assert(!throughput.isZero());
 
         if (m_dipoles.size() == 1) {
             return m_dipoles[0]->pdfDirectionDipole(
                     n_in, d_in, n_out, d_out, R, extraParams, m_dipConf);
         } else {
             Float pdf = 0;
-            int N = 0; // number of nonzero-throughput & valid-length channels
+            int N = 0; // number of nonzero-throughput channels
             for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
                 if (throughput[i] == 0)
                     continue;
-                const void *myExtraParams =
-                        static_cast<const char*>(extraParams)
-                            + i*individualExtraParamSize();
+                const void *myExtraParams = getIndividualExtraParams(extraParams, i);
                 pdf += m_dipoles[i]->pdfDirectionDipole(
                         n_in, d_in, n_out, d_out, R,
                         myExtraParams, m_dipConf);
