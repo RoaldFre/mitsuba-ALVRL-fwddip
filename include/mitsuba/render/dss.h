@@ -27,7 +27,6 @@
 #include <mitsuba/render/shape.h>
 #include <gsl/gsl_sf_lambert.h>
 
-#include <iomanip>
 #include <functional>
 
 /* When sampling a surface through projection, don't accept the sample if
@@ -708,6 +707,8 @@ protected:
  * */
 class MTS_EXPORT_RENDER DirectSamplingSubsurface : public Subsurface {
 public:
+    virtual void configure() { }
+
     /** \brief This default implementation fills in the internal list of
      * radiance sources and normalizes the MIS weights. */
     virtual bool preprocess(const Scene *scene, RenderQueue *queue,
@@ -854,7 +855,7 @@ public:
      * solid angle hemisphere. (I.e. the default cosine weighted sampling
      * explicitly has the cosine factor in the pdf.)
      */
-    virtual Spectrum sampleBssrdfDirection(const Scene *scene,
+    virtual Float sampleBssrdfDirection(const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             Intersection &its_in,        Vector       &d_in,
             const void *extraParams, const Spectrum &throughput,
@@ -864,7 +865,7 @@ public:
      * \brief Return the pdf on \c d_in that is used in \c
      * sampleBssrdfDirection().
      */
-    virtual Spectrum pdfBssrdfDirection(const Scene *scene,
+    virtual Float pdfBssrdfDirection(const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector &d_in,
             const void *extraParams, const Spectrum &throughput) const = 0;
@@ -1001,13 +1002,13 @@ protected:
             const Intersection &its_out, const Vector &d_out,
             Intersection       &its_in,  Vector       &d_in,
             Vector &rec_wi, EMeasure &bsdfMeasure,
-            Spectrum &pdf_d_in_and_rec_wi,
+            Float &pdf_d_in_and_rec_wi,
             const Spectrum &throughput,
             const void *extraParams,
             Sampler *sampler) const;
 
     /// pdf of \c sampleDirectionsFromBssrdf()
-    Spectrum pdfDirectionsFromBssrdf(
+    Float pdfDirectionsFromBssrdf(
             const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector &d_in,

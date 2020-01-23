@@ -26,12 +26,12 @@
 #include <gsl/gsl_sf_lambert.h>
 #include "../medium/materials.h"
 #include "fwdscat.h"
-#include "dipoleUtil.h"
 
 /* For the soft inverse sample ray cosine sampling */
 #define MARG_INVSAMPLER_EPSILON 1e-5f
 
 MTS_NAMESPACE_BEGIN
+
 
 /// Helper functions to sample proportinal to 1/(xEpsilon + x) for x on [0..xMax]
 static inline Float inverseSampler_sample(Float xEps, Float xMax, Float u) {
@@ -785,6 +785,9 @@ protected:
 };
 
 
+
+
+
 /*!\plugin{fwddip}{Forward Scattering Dipole subsurface scattering model}
  * \parameters{
  *     \parameter{material}{\String}{
@@ -943,636 +946,118 @@ protected:
  * be worthwile to increase \c numSIR to obtain better estimates of the
  * subsurface contribution per ray.
  */
-class MTS_EXPORT_RENDER FwdDip final : public DirectSamplingSubsurface {
-public:
-    FwdDip(const Properties &props)
-        : DirectSamplingSubsurface(props) {
-        m_rejectInternalIncoming = props.getBoolean(
-                "rejectInternalIncoming", false);
-        m_reciprocal = props.getBoolean("reciprocal", false);
+typedef DipoleDSS<FwdScat> FwdDip; // TODO can the documentation generation handle/find this?
 
-        std::string zvModeStr = props.getString("zvMode", "diff");
-        if (zvModeStr == "diff") {
-            m_zvMode = FwdScat::EClassicDiffusion;
-        } else if (zvModeStr == "better") {
-            m_zvMode = FwdScat::EBetterDipoleZv;
-        } else if (zvModeStr == "Frisvad") {
-            m_zvMode = FwdScat::EFrisvadEtAlZv;
-        } else {
-            Log(EError, "Unknown zvMode: %s", zvModeStr.c_str());
-        }
+template <>
+void FwdDip::configure() {
 
-        std::string tangentModeStr = props.getString("tangentMode", "Frisvad");
-        if (tangentModeStr == "incoming") {
-            m_tangentMode = FwdScat::EUnmodifiedIncoming;
-        } else if (tangentModeStr == "outgoing") {
-            m_tangentMode = FwdScat::EUnmodifiedOutgoing;
-        } else if (tangentModeStr == "Frisvad") {
-            m_tangentMode = FwdScat::EFrisvadEtAl;
-        } else if (tangentModeStr == "FrisvadMean") {
-            m_tangentMode = FwdScat::EFrisvadEtAlWithMeanNormal;
-        } else {
-            Log(EError, "Unknown tangentMode: %s", tangentModeStr.c_str());
-        }
+    Spectrum sigmaSPrime = m_sigmaS * (Spectrum(1.0f) - m_g);
+    Spectrum sigmaTPrime = sigmaSPrime + m_sigmaA;
+    /* Effective transport extinction coefficient */
+    Spectrum sigmaTr = (3 * m_sigmaA * sigmaTPrime).sqrt();
 
-        bool onlyReal = props.getBoolean("onlyReal", false);
-        bool onlyVirt = props.getBoolean("onlyVirt", false);
-        if (onlyReal && onlyVirt)
-            Log(EError, "Requested both *only* real and *only* virtual "
-                    "contributions!");
-        if (onlyReal) {
-            m_dipoleMode = FwdScat::EReal;
-            Log(EInfo, "Requested only contributions from real source");
-        } else if (onlyVirt) {
-            m_dipoleMode = FwdScat::EVirt;
-            Log(EInfo, "Requested only contributions from (positive) "
-                    "virtual source");
-        } else {
-            m_dipoleMode = FwdScat::ERealAndVirt;
-        }
+    Float mu = 1 - m_g.average();
 
-        m_useEffectiveBRDF = props.getBoolean("useEffectiveBRDF", false);
-
-        lookupMaterial(props, m_sigmaS, m_sigmaA, m_g, &m_eta);
-        Log(EInfo, "Loaded FwdDip with:\n"
-                "sigma_s = %s\nsigma_a = %s\ng = %s\np= %s\neta = %f",
-                m_sigmaS.toString().c_str(),
-                m_sigmaA.toString().c_str(),
-                m_g.toString().c_str(),
-                (0.5*m_sigmaS * (Spectrum(1.0f) - m_g)).toString().c_str(),
-                m_eta);
-
-        if (m_eta != 1) {
-            Log(EWarn, "You have chosen to make this Forward Scattering "
-                    "Dipole use non-index matched, 'implicit' boundaries "
-                    "internally (eta = %f, presumably coupled to a NULL or "
-                    "index-matched BSDF). Although this is possible, it is "
-                    "much advised to keep eta = 1 here and then couple this "
-                    "'index matched' subsurface scattering model to a "
-                    "refractive BSDF for more correct, 'explicit' boundary "
-                    "conditions!", m_eta);
-        }
-
-        configure();
-    }
-
-    FwdDip(Stream *stream, InstanceManager *manager)
-     : DirectSamplingSubsurface(stream, manager) {
-        m_sigmaS = Spectrum(stream);
-        m_sigmaA = Spectrum(stream);
-        m_g = Spectrum(stream);
-        m_rejectInternalIncoming = stream->readBool();
-        m_reciprocal = stream->readBool();
-        m_tangentMode = static_cast<FwdScat::TangentPlaneMode>(stream->readInt());
-        m_zvMode = static_cast<FwdScat::ZvMode>(stream->readInt());
-        m_dipoleMode = static_cast<FwdScat::DipoleMode>(stream->readInt());
-        m_useEffectiveBRDF = stream->readBool();
-        configure();
-    }
-
-    void serialize(Stream *stream, InstanceManager *manager) const {
-        DirectSamplingSubsurface::serialize(stream, manager);
-        m_sigmaS.serialize(stream);
-        m_sigmaA.serialize(stream);
-        m_g.serialize(stream);
-        stream->writeBool(m_rejectInternalIncoming);
-        stream->writeBool(m_reciprocal);
-        stream->writeInt(m_tangentMode);
-        stream->writeInt(m_zvMode);
-        stream->writeInt(m_dipoleMode);
-        stream->writeBool(m_useEffectiveBRDF);
-    }
+    Spectrum p_spectrum = (0.5*sigmaSPrime);
 
 
-    /**
-     * Sample lengths for all (non-zero throughput) spectral channels,
-     * returns the sampling weights. Unsuccessful sampling sets the
-     * length(s) to -1. */
-    inline Spectrum sampleLengths(
-            const Point &p_in,  const Vector &n_in,  const Vector *d_in,
-            const Point &p_out, const Vector &n_out, const Vector &d_out,
-            Float *lengths, const Spectrum &throughput,
-            Sampler *sampler) const {
-        Spectrum weights;
-        Vector R = p_out - p_in;
-        if (m_useEffectiveBRDF)
-            Assert(R.isZero());
-        if (m_fwdScat.size() == 1) {
-            weights = Spectrum(m_fwdScat[0]->sampleLengthDipole(
-                        d_out, n_out, R, d_in, n_in, m_tangentMode,
-                        lengths[0], sampler));
-            if (weights[0] == 0.0f)
-                lengths[0] = -1;
-        } else {
-            for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
-                if (throughput[i] == 0) {
-                    weights[i] = 0;
-                    lengths[i] = -1;
-                } else {
-                    weights[i] = m_fwdScat[i]->sampleLengthDipole(
-                                d_out, n_out, R, d_in, n_in, m_tangentMode,
-                                lengths[i], sampler);
-                    if (weights[i] == 0.0f)
-                        lengths[i] = -1;
-                }
-            }
-        }
-        Spectrum pdf = weights.invertButKeepZero();
-        return pdf;
-    }
+    // No need for fancy planar samplers if we are using the effective BRDF!
+    if (m_dipConf.useEffectiveBRDF) {
+        registerSampler(1.0, new BRDFDeltaSurfaceSampler());
+    } else {
+        /* MIS weights for surface sampler: */
+        /* Classical dipole for large lengths, weight 1/3 because this 
+         * should work almost equally wel in any of the three 
+         * projection directions */
+        const Float jensenWeight = 1./3.;
+        /* Dedicated sampler for small lengths, much more sensitive to 
+         * the projection direction, so give unit weight to each one. */
+        const Float smallLengthWeight = 1;
 
-    inline Spectrum pdfLengths(
-            const Point &p_in,  const Vector &n_in,  const Vector *d_in,
-            const Point &p_out, const Vector &n_out, const Vector &d_out,
-            const Float *lengths, const Spectrum &throughput) const {
-        Spectrum pdf;
-        Vector R = p_out - p_in;
-        if (m_fwdScat.size() == 1) {
-            if (lengths[0] == -1)
-                return Spectrum(0.0f);
-            pdf = Spectrum(m_fwdScat[0]->pdfLengthDipole(
-                        d_out, n_out, R, d_in, n_in, m_tangentMode, lengths[0]));
-        } else {
-            for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
-                if (throughput[i] == 0 || lengths[i] == -1) {
-                    pdf[i] = 0;
-                } else {
-                    pdf[i] = m_fwdScat[i]->pdfLengthDipole(
-                                d_out, n_out, R, d_in, n_in, m_tangentMode, lengths[i]);
-                }
-            }
-        }
-        return pdf;
-    }
+        ref<InstanceManager> manager = new InstanceManager();
 
-    size_t extraParamsSize() const {
-        return sizeof(ExtraParams);
-    }
+        /* Intersection sampler */
+        ref<IntersectionSampler> itsSamplerExactJensenDipole =
+                new WeightIntersectionSampler(distanceWeightWrapper(
+                        makeExactDiffusionDipoleDistanceWeight(
+                        m_sigmaA, m_sigmaS, m_g, m_eta)),
+                m_itsDistanceCutoff);
 
-    Spectrum sampleExtraParams(const Scene *scene,
-            const Intersection &its_out, const Vector &d_out,
-            const Intersection &its_in,  const Vector *d_in,
-            const Spectrum &throughput,
-            void *extraParams, Sampler *sampler) const {
-        Vector n_in = its_in.shFrame.n;
-        Vector n_out = its_out.shFrame.n;
-        Point p_in = its_in.p;
-        Point p_out = its_out.p;
+        ref<IntersectionSampler> itsSamplerEffectiveExtinction =
+                new WeightIntersectionSampler(distanceWeightWrapper(
+                        makeExponentialDistanceWeight(sigmaTr)),
+                m_itsDistanceCutoff);
 
-        Assert(dot(d_out, n_out) >= -Epsilon);
-        Assert(!d_in || dot(*d_in, n_in) <= Epsilon);
-        Assert(!m_useEffectiveBRDF || n_in == n_out);
-        Assert(!m_useEffectiveBRDF || p_in == p_out);
+        ref<IntersectionSampler> itsSamplerFwdDipSmallLenR2 =
+                new WeightIntersectionSampler(
+                        fwdDipSmallLengthWeightFunc(
+                            m_sigmaS, m_sigmaA, m_g, false),
+                m_itsDistanceCutoff);
+        ref<IntersectionSampler> itsSamplerFwdDipSmallLenR3 =
+                new WeightIntersectionSampler(
+                        fwdDipSmallLengthWeightFunc(
+                            m_sigmaS, m_sigmaA, m_g, true),
+                m_itsDistanceCutoff);
 
-        Spectrum extraParamsPdf = sampleLengths(p_in, n_in, d_in,
-                p_out, n_out, d_out, getLengths(extraParams), throughput,
-                sampler);
-        return extraParamsPdf;
-    }
-
-    virtual Spectrum pdfExtraParams(const Scene *scene,
-            const Intersection &its_out, const Vector &d_out,
-            const Intersection &its_in,  const Vector *d_in,
-            const Spectrum &throughput, const void *extraParams) const {
-        Vector n_in = its_in.shFrame.n;
-        Vector n_out = its_out.shFrame.n;
-        Point p_in = its_in.p;
-        Point p_out = its_out.p;
-
-        Assert(dot(d_out, n_out) >= -Epsilon);
-        Assert(!d_in || dot(*d_in, n_in) <= Epsilon);
-        Assert(!m_useEffectiveBRDF || n_in == n_out);
-        Assert(!m_useEffectiveBRDF || p_in == p_out);
-
-        Spectrum extraParamsPdf = pdfLengths(p_in, n_in, d_in,
-                p_out, n_out, d_out, getLengths(extraParams), throughput);
-        return extraParamsPdf;
-    }
-
-    /* Mix in a bit of hemisphere sampling for safety. Not very beneficial
-     * in combination with direct sampling, tough, so keep this small
-     * (but not zero for safety, because there can still be an bright
-     * *indirect* contribution, which happens to fall in a region where our
-     * importance sampling undersamples!) */
-    const Float direction_hemiSampleWeight = 0.05;
-
-    /**
-     * MIS weighting of importance sampling the transport and sampling the
-     * (cosine) hemisphere */
-    inline Float sampleDirection(const Vector &d_out, const Vector &n_out,
-            const Vector &n_in, const Vector &R, const Float *lengths,
-            Vector &d_in, const Spectrum &throughput, Sampler *sampler) const {
-        Float pdfHemi, pdfImp;
-        if (sampler->next1D() < direction_hemiSampleWeight) {
-            pdfHemi = sampleDirectionHemisphere(d_in, n_in, sampler);
-            if (pdfHemi == 0)
-                return 0;
-            pdfImp = pdfDirectionImportance(
-                    d_out, n_out, n_in, R, lengths, d_in, throughput);
-        } else {
-            pdfImp = sampleDirectionImportance(
-                    d_out, n_out, n_in, R, lengths, d_in, throughput, sampler);
-            if (pdfImp == 0)
-                return 0;
-            pdfHemi = pdfDirectionHemisphere(d_in, n_in);
-        }
-        return direction_hemiSampleWeight * pdfHemi
-                + (1 - direction_hemiSampleWeight) * pdfImp;;
-    }
-
-    inline Float pdfDirection(const Vector &d_out, const Vector &n_out,
-            const Vector &n_in, const Vector &R, const Float *lengths,
-            const Vector &d_in, const Spectrum &throughput) const {
-        Float pdf = 0;
-        pdf += direction_hemiSampleWeight
-                * pdfDirectionHemisphere(d_in, n_in);
-        pdf += (1 - direction_hemiSampleWeight)
-                * pdfDirectionImportance(
-                        d_out, n_out, n_in, R, lengths, d_in, throughput);
-        return pdf;
-    }
-
-    /// Returns pdf on the (non-cosine-weighted) hemisphere
-    inline Float sampleDirectionHemisphere(
-            Vector &d_in, const Vector &n_in, Sampler *sampler) const {
-        Frame frame(n_in);
-        Vector d_in_local = warp::squareToCosineHemisphere(sampler->next2D());
-        Float cosTheta = d_in_local.z;
-        d_in_local.z *= -1; // Pointing inwards
-        d_in = frame.toWorld(d_in_local);
-        AssertWarn(dot(d_in, n_in) <= 0);
-        return cosTheta * INV_PI;
-    }
-
-    /// Returns pdf on the (non-cosine-weighted) hemisphere
-    inline Float pdfDirectionHemisphere(
-            const Vector &d_in, const Vector &n_in) const {
-        if (dot(d_in, n_in) >= 0)
-            return 0;
-        return -dot(d_in,n_in) * INV_PI;
-    }
-
-    inline Float sampleDirection(int i,
-            Vector &d_in, const Vector &n_in,
-            const Vector &d_out, const Vector &n_out,
-            const Vector &R, Float s, Sampler *sampler) const {
-        Assert(s>=0);
-        Assert(dot(d_out, n_out) >= -Epsilon);
-        Assert(!m_useEffectiveBRDF || n_in == n_out);
-        Assert(!m_useEffectiveBRDF || R.isZero());
-
-        Float thePdf = m_fwdScat[i]->sampleDirectionDipole(
-                        d_in, n_in, d_out, n_out, R, s, m_tangentMode,
-                        m_useEffectiveBRDF, sampler);
-        if (thePdf == 0) {
-            /* Note: Or use hemisphere sampler? (nah: if dipole sampling
-             * fails, that means bssrdf evaluation will fail as well [for
-             * *any* direction] -- because e.g. the modified tangent plane
-             * can't be computed) */
-            return 0;
-        }
-#ifdef MTS_FWDDIP_DEBUG
-        Float pdfCheck = pdfDirection(i, d_in, n_in, d_out, n_out, R, s);
-        if (math::abs(thePdf - pdfCheck)/thePdf > 1e-3)
-            Log(EWarn, "Inconsistent direction pdf: %e vs %e, rel %f",
-                    thePdf, pdfCheck, (thePdf-pdfCheck)/thePdf);
-#endif
-        Assert(thePdf >= 0);
-        AssertWarn(thePdf > 0);
-        return thePdf;
-    }
-
-    inline Float pdfDirection(int i,
-            const Vector &d_in, const Vector &n_in,
-            const Vector &d_out, const Vector &n_out,
-            const Vector &R, Float s) const {
-        Assert(s>=0);
-        Assert(dot(d_out, n_out) >= -Epsilon);
-        Assert(!m_useEffectiveBRDF || n_in == n_out);
-        Assert(!m_useEffectiveBRDF || R.isZero());
-
-        return m_fwdScat[i]->pdfDirectionDipole(
-                            d_in, n_in, d_out, n_out, R, s, m_tangentMode,
-                            m_useEffectiveBRDF);
-    }
-
-    /* Can only sample one direction, because otherwise we would be
-     * branching into degenerate single-spectral-channel transport.
-     *
-     * We sample a non-zero throughput channel uniformly and the effective
-     * pdf becomes averaged pdf over all (non-zero-throughput and
-     * non-(-1)-length) channels (essentially like the MIS balance
-     * heuristic). Returns the pdf */
-    inline Float sampleDirectionImportance(
-            const Vector &d_out, const Vector &n_out,
-            const Vector &n_in, const Vector &R, const Float *lengths,
-            Vector &d_in, const Spectrum &throughput, Sampler *sampler) const {
-        if (m_fwdScat.size() == 1) {
-            if (lengths[0] == -1) {
-                return 0.0f;
-            }
-            return sampleDirection(0,
-                    d_in, n_in, d_out, n_out, R, lengths[0], sampler);
-        } else {
-            /* Only consider nonzero throughput channels that have a
-             * validly sampled length */
-            Spectrum effectiveThroughput(throughput);
-            for (int j = 0; j < SPECTRUM_SAMPLES; j++) {
-                if (lengths[j] == -1)
-                    effectiveThroughput[j] = 0;
-            }
-            int i = effectiveThroughput.sampleNonZeroChannelUniform(sampler);
-            Assert(lengths[i] >= 0);
-            Float pdf = sampleDirection(i,
-                    d_in, n_in, d_out, n_out, R, lengths[i], sampler);
-            if (pdf == 0)
-                return 0;
-            int N = 1; // number of nonzero throughput and non-(-1) lengths
-            for (int j = 0; j < SPECTRUM_SAMPLES; j++) {
-                if (i == j || effectiveThroughput[j] == 0)
-                    continue;
-                pdf += pdfDirection(j,
-                    d_in, n_in, d_out, n_out, R, lengths[j]);
-                N++;
-            }
-            pdf /= N;
-            return pdf;
-        }
-    }
-
-    inline Float pdfDirectionImportance(
-            const Vector &d_out, const Vector &n_out,
-            const Vector &n_in, const Vector &R, const Float *lengths,
-            const Vector &d_in, const Spectrum &throughput) const {
-        if (m_fwdScat.size() == 1) {
-            if (lengths[0] == -1)
-                return 0.0f;
-            return pdfDirection(0,
-                    d_in, n_in, d_out, n_out, R, lengths[0]);
-        } else {
-            Float pdf = 0;
-            int N = 0; // number of nonzero-throughput & valid-length channels
-            for (int j = 0; j < SPECTRUM_SAMPLES; j++) {
-                if (throughput[j] == 0 || lengths[j] == -1)
-                    continue;
-                pdf += pdfDirection(j,
-                    d_in, n_in, d_out, n_out, R, lengths[j]);
-                N++;
-            }
-            if (N > 0)
-                pdf /= N;
-            return pdf;
-        }
-    }
-
-    inline virtual Spectrum bssrdf(const Scene *scene,
-            const Point &p_in,  const Vector &d_in,  const Normal &n_in,
-            const Point &p_out, const Vector &d_out, const Normal &n_out,
-            const void *extraParams) const {
-        Assert(MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR || dot(d_in, n_in) <= 0);
-        Assert(m_allowIncomingOutgoingDirections || dot(d_out, n_out) >= 0);
-        Spectrum result;
-        for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
-            // Shortcut for when the given spectra are effectively 1D:
-            if (m_fwdScat.size() == 1 && i > 0) {
-                result[i] = result[0];
-                continue;
-            }
-
-            const FwdScat *fwdScat = m_fwdScat[i].get();
-
-            const Float *lengths = getLengths(extraParams);
-            Float s = lengths[i];
-            if (s == -1) {
-                result[i] = 0;
-                continue;
-            }
-
-            result[i] = fwdScat->evalDipole(
-                    n_in, d_in, n_out, d_out, p_out - p_in, s,
-                    m_rejectInternalIncoming, m_reciprocal,
-                    m_tangentMode, m_zvMode, m_useEffectiveBRDF,
-                    m_dipoleMode);
-        }
-        return result;
-    }
+        std::vector<std::pair<Float, const IntersectionSampler*> > is;
+        is.push_back(std::make_pair(0.1, itsSamplerEffectiveExtinction.get()));
+        is.push_back(std::make_pair(1.0, itsSamplerExactJensenDipole.get()));
+        is.push_back(std::make_pair(0.5, itsSamplerFwdDipSmallLenR2.get()));
+        is.push_back(std::make_pair(0.5, itsSamplerFwdDipSmallLenR3.get()));
+        ref<IntersectionSampler> itsSampler = new MISIntersectionSampler(is);
 
 
+        /* Plane projection sampler */
+        ref<TangentSampler2D> exactJensenDipoleSampler = new RadialSampler2D(
+                new RadialExactDipoleSampler2D(m_sigmaA, m_sigmaS, m_g, m_eta));
 
-    Spectrum sampleBssrdfDirection(const Scene *scene,
-            const Intersection &its_out, const Vector &d_out,
-            Intersection &its_in,        Vector       &d_in,
-            const void *extraParams, const Spectrum &throughput,
-            Sampler *sampler) const {
-        Point  p_out = its_out.p;
-        Point  p_in  = its_in.p;
-        Vector n_out = its_out.shFrame.n;
-        Vector n_in  = its_in.shFrame.n;
+        std::vector<std::pair<Float, const TangentSampler2D*> > perp;
+        perp.push_back(std::make_pair(smallLengthWeight,
+                new FwdDipSmallLengthSamplerPerpToDir(m_sigmaS, m_g, 1)));
+        perp.push_back(std::make_pair(jensenWeight,
+                exactJensenDipoleSampler));
 
-        /* Sample an incoming direction (on our side of the medium) */
-        Float directionPdf = sampleDirection(d_out, n_out, n_in, p_out - p_in,
-                getLengths(extraParams), d_in, throughput, sampler);
-        its_in.wi = its_in.toLocal(d_in);;
-        /* d_in should point inwards! */
-        if (directionPdf == 0 ||
-                (!MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
-                    && dot(d_in, n_in) >= 0)) {
-            return Spectrum(0.0f);
-        }
+        std::vector<std::pair<Float, const TangentSampler2D*> > along;
+        along.push_back(std::make_pair(smallLengthWeight,
+                new FwdDipSmallLengthSamplerAlongDir(m_sigmaS, m_g, 1)));
+        along.push_back(std::make_pair(jensenWeight,
+                exactJensenDipoleSampler));
 
-#ifdef MTS_FWDDIP_DEBUG
-        Float pdf2 = pdfBssrdfDirection(scene, its_out, d_out, its_in,
-                d_in, extraParams, throughput).average();
-        if (fabs((directionPdf - pdf2)/(directionPdf + pdf2)) > 1e-3)
-            SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
-                    directionPdf, pdf2, directionPdf/pdf2);
-#endif
-        return Spectrum(directionPdf);
-    }
+        ref<TangentSampler2D> smallLengthSampler_perp =
+                new MISTangentSampler2D(perp);
+        ref<TangentSampler2D> smallLengthSampler_along =
+                new MISTangentSampler2D(along);
 
-    Spectrum pdfBssrdfDirection(const Scene *scene,
-            const Intersection &its_out, const Vector &d_out,
-            const Intersection &its_in,  const Vector &d_in,
-            const void *extraParams, const Spectrum &throughput) const {
-        Vector n_out = its_out.shFrame.n;
-        Vector n_in  = its_in.shFrame.n;
-        if (!MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR && dot(d_in, n_in) >= 0)
-            return Spectrum(0.0f);
-        Float directionPdf = pdfDirection(d_out, n_out, n_in,
-                its_out.p - its_in.p, getLengths(extraParams), d_in,
-                throughput);
-        return Spectrum(directionPdf);
-    }
-
-    void configure() {
-        if (m_fwdScat.size() != 0)
-            return; /* We have already been configured! */
-
-        if (m_sigmaS.max() == m_sigmaS.min()
-         && m_sigmaA.max() == m_sigmaA.min()
-         && m_g.max() == m_g.min()) {
-            // Effective 1D problem as far as spectral channels are concerned
-            m_fwdScat.resize(1);
-            m_fwdScat[0] = new FwdScat(
-                    m_g.min(), m_sigmaS.min(), m_sigmaA.min(), m_eta);
-        } else {
-            m_fwdScat.resize(SPECTRUM_SAMPLES);
-            for (int i = 0; i < SPECTRUM_SAMPLES; i++)
-                m_fwdScat[i] = new FwdScat(
-                        m_g[i], m_sigmaS[i], m_sigmaA[i], m_eta);
-        }
-
-        Spectrum sigmaSPrime = m_sigmaS * (Spectrum(1.0f) - m_g);
-        Spectrum sigmaTPrime = sigmaSPrime + m_sigmaA;
-        /* Effective transport extinction coefficient */
-        Spectrum sigmaTr = (3 * m_sigmaA * sigmaTPrime).sqrt();
-
-        Float mu = 1 - m_g.average();
-
-        Spectrum p_spectrum = (0.5*sigmaSPrime);
-
-
-        // No need for fancy planar samplers if we are using the effective BRDF!
-        if (m_useEffectiveBRDF) {
-            registerSampler(1.0, new BRDFDeltaSurfaceSampler());
-        } else {
-            /* MIS weights for surface sampler: */
-            /* Classical dipole for large lengths, weight 1/3 because this 
-             * should work almost equally wel in any of the three 
-             * projection directions */
-            const Float jensenWeight = 1./3.;
-            /* Dedicated sampler for small lengths, much more sensitive to 
-             * the projection direction, so give unit weight to each one. */
-            const Float smallLengthWeight = 1;
-
-            ref<InstanceManager> manager = new InstanceManager();
-
-            /* Intersection sampler */
-            ref<IntersectionSampler> itsSamplerExactJensenDipole =
-                    new WeightIntersectionSampler(distanceWeightWrapper(
-                            makeExactDiffusionDipoleDistanceWeight(
-                            m_sigmaA, m_sigmaS, m_g, m_eta)),
-                    m_itsDistanceCutoff);
-
-            ref<IntersectionSampler> itsSamplerEffectiveExtinction =
-                    new WeightIntersectionSampler(distanceWeightWrapper(
-                            makeExponentialDistanceWeight(sigmaTr)),
-                    m_itsDistanceCutoff);
-
-            ref<IntersectionSampler> itsSamplerFwdDipSmallLenR2 =
-                    new WeightIntersectionSampler(
-                            fwdDipSmallLengthWeightFunc(
-                                m_sigmaS, m_sigmaA, m_g, false),
-                    m_itsDistanceCutoff);
-            ref<IntersectionSampler> itsSamplerFwdDipSmallLenR3 =
-                    new WeightIntersectionSampler(
-                            fwdDipSmallLengthWeightFunc(
-                                m_sigmaS, m_sigmaA, m_g, true),
-                    m_itsDistanceCutoff);
-
-            std::vector<std::pair<Float, const IntersectionSampler*> > is;
-            is.push_back(std::make_pair(0.1, itsSamplerEffectiveExtinction.get()));
-            is.push_back(std::make_pair(1.0, itsSamplerExactJensenDipole.get()));
-            is.push_back(std::make_pair(0.5, itsSamplerFwdDipSmallLenR2.get()));
-            is.push_back(std::make_pair(0.5, itsSamplerFwdDipSmallLenR3.get()));
-            ref<IntersectionSampler> itsSampler = new MISIntersectionSampler(is);
-
-
-            /* Plane projection sampler */
-            ref<TangentSampler2D> exactJensenDipoleSampler = new RadialSampler2D(
-                    new RadialExactDipoleSampler2D(m_sigmaA, m_sigmaS, m_g, m_eta));
-
-            std::vector<std::pair<Float, const TangentSampler2D*> > perp;
-            perp.push_back(std::make_pair(smallLengthWeight,
-                    new FwdDipSmallLengthSamplerPerpToDir(m_sigmaS, m_g, 1)));
-            perp.push_back(std::make_pair(jensenWeight,
-                    exactJensenDipoleSampler));
-
-            std::vector<std::pair<Float, const TangentSampler2D*> > along;
-            along.push_back(std::make_pair(smallLengthWeight,
-                    new FwdDipSmallLengthSamplerAlongDir(m_sigmaS, m_g, 1)));
-            along.push_back(std::make_pair(jensenWeight,
-                    exactJensenDipoleSampler));
-
-            ref<TangentSampler2D> smallLengthSampler_perp =
-                    new MISTangentSampler2D(perp);
-            ref<TangentSampler2D> smallLengthSampler_along =
-                    new MISTangentSampler2D(along);
 
 
 #if 1
-            registerSampler(1.0, new ProjSurfaceSampler(
-                    DSSProjFrame::EDirectionDirection,
-                    smallLengthSampler_perp, itsSampler.get()));
+        registerSampler(1.0, new ProjSurfaceSampler(
+                DSSProjFrame::EDirectionDirection,
+                smallLengthSampler_perp, itsSampler.get()));
 #endif
 #if 1
-            /* Double the weight because this is the most 'natural' sampler 
-             * for truly near-planar boundaries */
-            registerSampler(2.0, new ProjSurfaceSampler(
-                    DSSProjFrame::EDirectionOut,
-                    smallLengthSampler_along, itsSampler.get()));
+        /* Double the weight because this is the most 'natural' sampler 
+         * for truly near-planar boundaries */
+        registerSampler(2.0, new ProjSurfaceSampler(
+                DSSProjFrame::EDirectionOut,
+                smallLengthSampler_along, itsSampler.get()));
 #endif
 #if 1
-            registerSampler(1.0, new ProjSurfaceSampler(
-                    DSSProjFrame::EDirectionSide,
-                    smallLengthSampler_along, itsSampler.get()));
+        registerSampler(1.0, new ProjSurfaceSampler(
+                DSSProjFrame::EDirectionSide,
+                smallLengthSampler_along, itsSampler.get()));
 #endif
 
 #if 1
-            registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, 0, itsSampler));
-            //registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, ShadowEpsilon, itsSampler));
+        registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, 0, itsSampler));
+        //registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, ShadowEpsilon, itsSampler));
 #endif
-        }
-
-        normalizeSamplers();
     }
 
-    bool preprocess(const Scene *scene, RenderQueue *queue,
-            const RenderJob *job, int sceneResID, int cameraResID,
-            int _samplerResID) {
-        return DirectSamplingSubsurface::preprocess(scene, queue, job,
-                sceneResID, cameraResID, _samplerResID);
-    }
+    normalizeSamplers();
+}
 
-    void cancel() { }
-
-    std::string toString() const {
-        std::ostringstream oss;
-        oss << "FwdDip[" << endl;
-        oss << "  sigmaS = " << m_sigmaS.toString() << endl;
-        oss << "  sigmaA = " << m_sigmaA.toString() << endl;
-        oss << "  g = " << m_g.toString() << endl;
-        oss << "]" << endl;
-        return oss.str();
-    }
-
-    MTS_DECLARE_CLASS()
-private:
-    Spectrum m_sigmaS, m_sigmaA, m_g;
-    bool m_rejectInternalIncoming;
-    bool m_reciprocal;
-    FwdScat::TangentPlaneMode m_tangentMode;
-    FwdScat::ZvMode m_zvMode;
-    FwdScat::DipoleMode m_dipoleMode;
-    bool m_useEffectiveBRDF;
-    ref_vector<FwdScat> m_fwdScat; // Initialized by configure()
-
-    struct ExtraParams {
-        Float lengths[SPECTRUM_SAMPLES];
-    };
-
-    static const Float* getLengths(const void *extraParams) {
-        const ExtraParams &params(
-                *static_cast<const ExtraParams*>(extraParams));
-        return params.lengths;
-    }
-    static Float* getLengths(void *extraParams) {
-        ExtraParams &params(*static_cast<ExtraParams*>(extraParams));
-        return params.lengths;
-    }
-};
-
-MTS_IMPLEMENT_CLASS_S(FwdDip, false, DirectSamplingSubsurface);
+MTS_IMPLEMENT_CLASS_TS(FwdDip, false, DirectSamplingSubsurface);
 MTS_IMPLEMENT_CLASS(FwdDipSmallLengthSamplerPerpToDir, false, TangentSampler2D);
 MTS_IMPLEMENT_CLASS(FwdDipSmallLengthSamplerAlongDir, false, TangentSampler2D);
 MTS_IMPLEMENT_CLASS(FwdDipSmallLengthRadialSampler2D, false, Sampler1D);

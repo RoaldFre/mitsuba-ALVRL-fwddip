@@ -1,5 +1,4 @@
 #include "fwdscat.h"
-#include "dipoleUtil.h"
 
 #include <mitsuba/core/warp.h>
 #include <mitsuba/render/truncnorm.h>
@@ -9,20 +8,12 @@
 
 MTS_NAMESPACE_BEGIN
 
-/* Reject incoming directions that come from within the actual geometry
- * (i.e. w.r.t. the actual local normal at the incoming point instead of,
- * for instance, the modified tangent plane normal)? */
-#define MTS_FWDSCAT_DIPOLE_REJECT_INCOMING_WRT_TRUE_SURFACE_NORMAL true
-
 #define MTS_FWDSCAT_GIVE_REAL_AND_VIRTUAL_SOURCE_EQUAL_SAMPLING_WEIGHT false
 
 static constexpr Float directionSampler_origWeight = 0.5; // TODO
 
-/* Sample the dipole direction as a simple cosine weighted hemisphere with
- * this weight. This improves robustness in case we would severely
- * undersample the transport with the dedicated importance samplers (e.g.
- * by underestimating the width of a sharp peak). */
-static constexpr Float directionSampler_dipoleHemiWeight = 0.05;
+#define FS_INLINE inline /* Faster build time */
+//#define FS_INLINE FINLINE /* More possibility for redundant code elimination but potentially worse cache performance */
 
 #ifdef MTS_FWDSCAT_DEBUG
 # define FSAssert(x)      Assert(x)
@@ -36,7 +27,7 @@ static constexpr Float directionSampler_dipoleHemiWeight = 0.05;
 # define SFSAssertWarn(x) ((void) 0)
 #endif
 
-FINLINE Float _reducePrecisionForCosTheta(Float x) {
+FS_INLINE Float _reducePrecisionForCosTheta(Float x) {
     /* Turns out not to help too much -- or even make things worse! So
      * don't round. TODO: Test some more at some point... */
     return x;
@@ -44,18 +35,18 @@ FINLINE Float _reducePrecisionForCosTheta(Float x) {
     //return roundToSignificantDigits(x, 3);
 }
 
-FINLINE void roundCosThetaBoundsForStability(
+FS_INLINE void roundCosThetaBoundsForStability(
         Float &minCosTheta, Float &maxCosTheta) {
     minCosTheta = _reducePrecisionForCosTheta(minCosTheta);
     maxCosTheta = _reducePrecisionForCosTheta(maxCosTheta);
 }
-FINLINE Float roundCosThetaForStability(Float cosTheta,
+FS_INLINE Float roundCosThetaForStability(Float cosTheta,
         Float minCosTheta, Float maxCosTheta) {
     cosTheta = math::clamp(cosTheta, minCosTheta, maxCosTheta);
     return _reducePrecisionForCosTheta(cosTheta);
 }
 
-FINLINE double FwdScat::absorptionAndNormalizationConstant(Float theLength) const {
+FS_INLINE double FwdScat::absorptionAndNormalizationConstant(Float theLength) const {
     const double ps = p * theLength;
 
     double result;
@@ -65,7 +56,7 @@ FINLINE double FwdScat::absorptionAndNormalizationConstant(Float theLength) cons
         const double c1 = 891./320;
         const double c2 = 8721./6400;
         const double c3 = -374841./448000;
-        result = p*p*p * SQRT_TWO_DBL * std::pow(M_PI_DBL, -2.5) * exp(-sigma_a*theLength)
+        result = p*p*p * SQRT_TWO_DBL * std::pow(M_PI_DBL, -2.5) * exp(-m_sigA*theLength)
                 * std::pow(ps, -11./2) * (c0 + c1*ps + c2*ps*ps + c3*ps*ps*ps);
     } else {
         double C, D, E, F, Z;
@@ -77,7 +68,7 @@ FINLINE double FwdScat::absorptionAndNormalizationConstant(Float theLength) cons
         } else {
             ZoverExpMinOne = Z / (exp(Z) - 1);
         }
-        result = 0.25 / std::pow(M_PI_DBL, 2.5) * exp(C - D - sigma_a*theLength)
+        result = 0.25 / std::pow(M_PI_DBL, 2.5) * exp(C - D - m_sigA*theLength)
                 * sqrt(F) * F * ZoverExpMinOne;
     }
 
@@ -99,11 +90,10 @@ FINLINE double FwdScat::absorptionAndNormalizationConstant(Float theLength) cons
  * \param Z   Z = E^2/F - 2*D (which is > 0 and dimensionless;
  *            in terms of t: Z = 6t/(1-t^2))
  */
-FINLINE void FwdScat::calcValues(double length, double &C, double &D, 
+FS_INLINE void FwdScat::calcValues(double length, double &C, double &D, 
         double &E, double &F, double *Z_ptr) const {
     FSAssert(length >= 0);
-    FSAssert(mu > 0 && mu <= 1);
-    FSAssert(sigma_s > 0);
+    FSAssert(m_sigS > 0);
     FSAssert(length >= 0);
 
     double s = length;
@@ -158,247 +148,24 @@ FINLINE void FwdScat::calcValues(double length, double &C, double &D,
 }
 
 
-/// if rejectInternalIncoming is requested: returns false if we should stop
-FINLINE bool FwdScat::getVirtualDipoleSource(
-        Normal n0, Vector u0,
-        Normal nL, Vector uL,
-        Vector R, Float length,
-        bool rejectInternalIncoming,
-        TangentPlaneMode tangentMode,
-        ZvMode zvMode,
-        Vector &u0_virt, Vector &R_virt,
-        Vector *optional_n0_effective) const {
-    Normal n0_effective;
-    switch (tangentMode) {
-    case EFrisvadEtAl:
-        /* Use the modified tangent plane of the directional dipole model
-         * of Frisvad et al */
-        if (R.length() == 0) {
-            n0_effective = n0;
-        } else {
-            if (cross(n0,R).length() == 0)
-                return false;
-            n0_effective = cross(normalize(R), normalize(cross(n0, R)));
-            FSAssert(dot(n0_effective, n0) > -Epsilon);
-        }
-        break;
-    case EFrisvadEtAlWithMeanNormal: {
-        /* Like the tangent plane of Frisvad et al, but based on an
-         * 'average' normal at incoming and outgoing point instead of on
-         * the incoming normal. This should immediately give reciprocity as
-         * a bonus. */
-        Vector sumNormal = n0 + nL;
-        if (R.length() == 0) {
-            n0_effective = n0;
-        } else {
-            if (cross(sumNormal,R).length() == 0)
-                return false;
-            n0_effective = cross(normalize(R), normalize(cross(sumNormal, R)));
-        }
-        break; }
-    case EUnmodifiedIncoming:
-        n0_effective = n0; break;
-    case EUnmodifiedOutgoing:
-        n0_effective = nL; break;
-    default:
-        Log(EError, "Unknown tangentMode: %d", tangentMode);
-        return false; // keep compiler happy
-    }
-    if (!n0_effective.isFinite()) {
-        Log(EWarn, "Non-finite n0_effective: %s", n0_effective.toString().c_str());
-        return false;
-    }
 
-    if (rejectInternalIncoming && dot(n0_effective, u0) > 0)
-        return false;
-
-    FSAssert(math::abs(n0_effective.length() - 1) < Epsilon);
-
-    Float zv;
-    Float sigma_sp = sigma_s * mu;
-    Float sigma_tp = sigma_sp + sigma_a;
-
-
-    switch (zvMode) {
-    case EFrisvadEtAlZv: {
-        if (sigma_tp == 0 || sigma_sp == 0)
-            return false;
-        Float D = 1./(3.*sigma_tp);
-        Float alpha_p = sigma_sp / sigma_tp;
-        Float d_e = 2.131 * D / sqrt(alpha_p);
-        Float A = dEon_A(m_eta);
-        zv = 2*A*d_e;
-        break; }
-    case EBetterDipoleZv: {
-        if (sigma_tp == 0)
-            return false;
-        Float D = (2*sigma_a + sigma_sp)/(3*math::square(sigma_tp));
-        Float A = dEon_A(m_eta);
-        zv = 4*A*D;
-        break; }
-    case EClassicDiffusion: {
-        if (sigma_tp == 0)
-            return false;
-        Float Fdr = fresnelDiffuseReflectance(1 / m_eta);
-        Float A = (1 + Fdr) / (1 - Fdr);
-        Float D = 1./(3*sigma_tp);
-        zv = 4*A*D;
-        break; }
-    default:
-        Log(EError, "Unknown VirtSourceHeight mode %d", zvMode);
-        return false;
-    }
-
-    /* If not rejectInternalIncoming -> virtual source will point *INTO*
-     * the half space!! (and 'cross' the actual real source "beam" if we
-     * elongate it).
-     * Maybe flip the normal? (to get the half space on the other side...) */
-    R_virt = R - zv * n0_effective;
-    u0_virt = u0  -  2*dot(n0_effective, u0) * n0_effective;
-    if (optional_n0_effective)
-        *optional_n0_effective = n0_effective;
-    return true;
-}
-
-FINLINE bool FwdScat::getTentativeIndexMatchedVirtualSourceDisp(
-        Normal n0,
-        Normal nL, Vector uL,
-        Vector R,
-        Float s, // not always required
-        TangentPlaneMode tangentMode,
-        Vector &R_virt,
-        Vector *optional_n0_effective,
-        Float *optional_realSourceRelativeWeight) const {
-    Vector _u0_virt, n0_effective;
-    Vector _u0(0.0f/0.0f);
-    bool rejectInternalIncoming = false; //u0 not sensible yet!
-    ZvMode zvMode = EClassicDiffusion; //only one that does not depend on u0
-    if (!getVirtualDipoleSource(n0, _u0, nL, uL, R, s,
-            rejectInternalIncoming, tangentMode, zvMode,
-            _u0_virt, R_virt, &n0_effective)) {
-        return false; // Won't be able to evaluate bssrdf transport anyway!
+FS_INLINE Float FwdScat::evalMonopole(const Monopole &m) const {
+    Float s = *(static_cast<const Float*>(m.extraParams));
+    Assert(s >= 0);
+    if (m.isPlaneSource()) {
+        return evalPlaneSource(m.d_in, m.d_out, m.n_in, dot(m.n_in, m.R), s);
     } else {
-        FSAssert(R_virt.isFinite());
-    }
-    if (optional_n0_effective)
-        *optional_n0_effective = n0_effective;
-    if (!optional_realSourceRelativeWeight)
-        return true;
-    double C, D, E, F;
-    calcValues(s, C, D, E, F);
-    double ratio = exp(E*dot(R-R_virt,uL) - F*(R.lengthSquared()-R_virt.lengthSquared()));
-    Float realSourceWeight = (std::isinf(ratio + 1) ? 1.0 : ratio/(ratio + 1));
-    // TODO: clamp the extremes of 0 and 1 to something slightly more 'centered'?
-    FSAssert(realSourceWeight >= 0 && realSourceWeight <= 1);
-#if MTS_FWDSCAT_GIVE_REAL_AND_VIRTUAL_SOURCE_EQUAL_SAMPLING_WEIGHT
-    *optional_realSourceRelativeWeight = 0.5;
-#else
-    *optional_realSourceRelativeWeight = realSourceWeight;
-#endif
-    return true;
-}
-
-
-
-
-FINLINE Float FwdScat::evalDipole(
-        Normal n0, Vector u0_external,
-        Normal nL, Vector uL_external,
-        Vector R, Float length,
-        bool rejectInternalIncoming,
-        bool reciprocal,
-        TangentPlaneMode tangentMode,
-        ZvMode zvMode,
-        bool useEffectiveBRDF,
-        DipoleMode dipoleMode) const {
-
-    /* If reciprocal is requested, nL should be finite and uL_external should point
-     * along nL. */
-    FSAssert(!reciprocal || nL.isFinite());
-    FSAssert(!reciprocal || dot(uL_external,nL) >= -Epsilon); // positive with small margin for roundoff errors
-    if (nL.isFinite() && dot(uL_external,nL) <= 0) // clamp to protect against roundoff errors
-        return 0.0f;
-
-#if MTS_FWDSCAT_DIPOLE_REJECT_INCOMING_WRT_TRUE_SURFACE_NORMAL
-    if (dot(u0_external, n0) >= 0)
-        return 0.0f;
-#endif
-
-
-    /* Handle eta != 1 case by 'refracting' the 'external' directions
-     * u0_external and uL_external to 'internal' directions u0 and uL. We
-     * keep the directions pointing along the propagation direction of
-     * light (i.e. not the typical refract as in BSDFs, for instance, which
-     * flips to the other side of the boundary). */
-    Float _cosThetaT, F0, FL;
-    Vector u0 = refract(-u0_external, n0, m_eta, _cosThetaT, F0);
-    Vector uL = -refract(uL_external, nL, m_eta, _cosThetaT, FL);
-    Float fresnelTransmittance = (1-F0)*(1-FL);
-
-    if (m_eta == 1)
-        FSAssert(u0 == u0_external  &&  uL == uL_external);
-
-    if (u0.isZero() || uL.isZero()) {
-        if (m_eta > 1)
-            Log(EWarn, "Could not refract, which is weird because we have a "
-                    "higher ior! (eta=%f)", m_eta);
-        return 0.0f;
-    }
-
-
-    Vector R_virt;
-    Vector u0_virt;
-    if (!getVirtualDipoleSource(n0, u0, nL, uL, R, length,
-            rejectInternalIncoming, tangentMode, zvMode,
-            u0_virt, R_virt))
-        return 0.0f;
-
-    // Effective BRDF?
-    if (useEffectiveBRDF) {
-        FSAssert((n0 - nL).length() < Epsilon); // same point -> same normal
-        Float Rv_z = dot(R_virt, nL);
-#ifdef MTS_FWDSCAT_DEBUG
-        Float lRvl = R_virt.length();
-        FSAssert((n0 - nL).length() < Epsilon); // same point -> same normal
-        FSAssert(Rv_z <= 0); // pointing from virtual point towards xL -> into medium
-        // the only displacement should be in the normal direction:
-        FSAssertWarn(lRvl == 0 || math::abs((lRvl - math::abs(Rv_z))/lRvl) < Epsilon);
-#endif
-
-        return fresnelTransmittance * (
-                  evalPlaneSource(u0,      uL, nL, 0.0f, length)
-                - evalPlaneSource(u0_virt, uL, nL, Rv_z, length));
-    }
-
-    // Full BSSRDF
-    Float real = 0, virt = 0;
-    if (dipoleMode & EReal)
-        real = evalMonopole(u0,      uL, R,      length);
-    if (dipoleMode & EVirt)
-        virt = evalMonopole(u0_virt, uL, R_virt, length);
-    Float transport;
-    switch (dipoleMode) {
-        case ERealAndVirt: transport = real - virt; break;
-        case EReal:        transport = real; break;
-        case EVirt:        transport = virt; break; // note: positive sign
-        default: Log(EError, "Unknown dipoleMode: %d", dipoleMode); return 0;
-    }
-    if (reciprocal) {
-        Float transportRev = evalDipole(
-                nL, -uL, n0, -u0, -R, length,
-                rejectInternalIncoming, false,
-                tangentMode, zvMode, useEffectiveBRDF, dipoleMode);
-        return 0.5 * (transport + transportRev) * fresnelTransmittance;
-    } else {
-        return transport * fresnelTransmittance;
+        return evalMonopole(m.d_in, m.d_out, m.R, s);
     }
 }
 
 
-
-FINLINE Float FwdScat::evalMonopole(Vector u0, Vector uL, Vector R, Float length) const {
+FS_INLINE Float FwdScat::evalMonopole(Vector u0, Vector uL, Vector R, Float length) const {
     FSAssert(math::abs(u0.length() - 1) < 1e-6);
     FSAssert(math::abs(uL.length() - 1) < 1e-6);
+
+    if (length < 0)
+        return 0;
     
     double C, D, E, F;
     calcValues(length, C, D, E, F);
@@ -428,28 +195,22 @@ FINLINE Float FwdScat::evalMonopole(Vector u0, Vector uL, Vector R, Float length
     if (math::abs(F*R.lengthSquared()) > 1e3)
         CancellationCheck(-C + E*dot(R,uL) + lHlreg*cosTheta, -F*R.lengthSquared());
 
-#ifdef MTS_FWDSCAT_DEBUG
     if (!std::isfinite(G) || G < 0) {
-        Log(EWarn, "Invalid G in evalMonopole(): "
-                "%e; ss %e C %e D %e E %e F %e Rsq %e u0dotuL %e\n"
-                "%e %e %e %e %e\n"
-                "%e %e",
-                G, length*sqrt(1.5)*sigma_s*mu, C, D, E, F, R.lengthSquared(), dot(u0,uL),
-
-                N, -C, E*dot(R,uL), lHlreg*cosTheta, -F*R.lengthSquared(),
-
-                -C + E*dot(R,uL) + lHlreg*cosTheta - F*R.lengthSquared(),
-                exp(-C + E*dot(R,uL) + lHlreg*cosTheta - F*R.lengthSquared()));
+#ifdef MTS_FWDSCAT_DEBUG
+        Log(EWarn, "Invalid G in evalMonopole(): %e", G);
+#endif
         return 0;
     }
-#endif
     return G;
 }
 
-FINLINE Float FwdScat::evalPlaneSource(Vector u0, Vector uL,
+FS_INLINE Float FwdScat::evalPlaneSource(Vector u0, Vector uL,
         Vector n, Float Rz, Float length) const {
     FSAssert(math::abs(u0.length() - 1) < 1e-6);
     FSAssert(math::abs(uL.length() - 1) < 1e-6);
+    FSAssert(math::abs(n.length() - 1) < 1e-6);
+    FSAssert(length >= 0);
+    FSAssert(std::isfinite(Rz));
 
     double C, D, E, F;
     calcValues(length, C, D, E, F);
@@ -479,80 +240,103 @@ static constexpr Float lengthSample_w1 = 0.5; /* short length limit */
 static constexpr Float lengthSample_w2 = 0.5; /* long length limit */
 static constexpr Float lengthSample_w3 = 0.0; /* absorption */
 
-// If d_in is unknown, it is set to NULL
-FINLINE Float FwdScat::sampleLengthDipole(
-        const Vector &uL, const Vector &nL, const Vector &R,
-        const Vector *u0, const Vector &n0,
-        TangentPlaneMode tangentMode, Float &s, Sampler *sampler) const {
 
-    Vector R_virt;
-    if (!getTentativeIndexMatchedVirtualSourceDisp(
-            n0, nL, uL, R, 0./0., tangentMode, R_virt))
-        return 0.0;
 
-    /* For R-dependent functions that don't take the dipole into account
-     * themselves.
-     * TODO: Smart MIS weight? (Need length-marginalized 'realSourceWeight'
-     * from getTentativeIndexMatchedVirtualSourceDisp then.) */
-    Vector R_effective, R_other;
-    if (sampler->next1D() < 0.5) {
-        R_effective = R;
-        R_other = R_virt;
-    } else {
-        R_effective = R_virt;
-        R_other = R;
-    }
+
+
+
+
+/**
+ * Sample length. Unsuccessful sampling sets the length to -1. */
+FS_INLINE Float FwdScat::sampleExtraParamsMonopole(
+        const Monopole &m, void *extraParams, Sampler *sampler) const {
+    FSAssert(m.extraParams == extraParams);
+    Float &s = *(static_cast<Float*>(extraParams));
 
     Float p1, p2, p3;
     p1 = p2 = p3 = -1;
+    const Vector *d_inPtr = (m.hasDin() ? &m.d_in : NULL);
     const Float u = sampler->next1D();
     if (u < lengthSample_w1) {
-        p1 = sampleLengthShortLimit(R, u0, uL, s, sampler);
-        if (p1 == 0)
+        p1 = sampleLengthShortLimit(m.R, d_inPtr, m.d_out, s, sampler);
+        if (p1 == 0) {
+            s = -1;
             return 0.0f;
+        }
     } else if (u < lengthSample_w1 + lengthSample_w2) {
-        p2 = sampleLengthLongLimit(R_effective, uL, s, sampler);
-        if (p2 == 0)
+        p2 = sampleLengthLongLimit(m.R, m.d_out, s, sampler);
+        if (p2 == 0) {
+            s = -1;
             return 0.0f;
+        }
     } else if (u < lengthSample_w1 + lengthSample_w2 + lengthSample_w3) {
         p3 = sampleLengthAbsorption(s, sampler);
-        if (p3 == 0)
+        if (p3 == 0) {
+            s = -1;
             return 0.0f;
+        }
     }
 
     if (p1 == -1)
-        p1 = (lengthSample_w1 == 0 ? 0 : pdfLengthShortLimit(R, u0, uL, s));
+        p1 = (lengthSample_w1 == 0 ? 0 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s));
     if (p2 == -1)
-        p2 = (lengthSample_w2 == 0 ? 0 : pdfLengthLongLimit(R_effective, uL, s));
+        p2 = (lengthSample_w2 == 0 ? 0 : pdfLengthLongLimit(m.R, m.d_out, s));
     if (p3 == -1)
         p3 = (lengthSample_w3 == 0 ? 0 : pdfLengthAbsorption(s));
 
-    // Handle the MIS probabilities of having sampled based on R_other
-    if (lengthSample_w2 != 0)
-        p2 = 0.5 * (p2 + pdfLengthLongLimit(R_other, uL, s));
-
-    return 1.0 / (lengthSample_w1 * p1
-                + lengthSample_w2 * p2
-                + lengthSample_w3 * p3);
+    Float pdf = (lengthSample_w1 * p1
+               + lengthSample_w2 * p2
+               + lengthSample_w3 * p3);
+#ifdef MTS_FWDSCAT_DEBUG
+    if (pdf == 0)
+        return 0;
+    Float pdfCheck = pdfExtraParamsMonopole(m);
+    if (math::abs(pdf-pdfCheck)/pdf > 1e-3) {
+        Log(EWarn, "Inconsistent pdfs: %e %e, rel %f  -- s %e hasDin %d  %e %e %e",
+                pdf, pdfCheck, (pdf-pdfCheck)/pdf,
+                s,
+                m.hasDin(),
+                (lengthSample_w1 == 0 ? -1 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s)),
+                (lengthSample_w2 == 0 ? -1 : pdfLengthLongLimit(m.R, m.d_out, s)),
+                (lengthSample_w3 == 0 ? -1 : pdfLengthAbsorption(s)));
+    }
+#if 0
+    else
+        Log(EWarn, "consistent pdfs: %e %e, rel %f  -- s %e hasDin %d  %e %e %e",
+                pdf, pdfCheck, (pdf-pdfCheck)/pdf,
+                s,
+                m.hasDin(),
+                (lengthSample_w1 == 0 ? -1 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s)),
+                (lengthSample_w2 == 0 ? -1 : pdfLengthLongLimit(m.R, m.d_out, s)),
+                (lengthSample_w3 == 0 ? -1 : pdfLengthAbsorption(s)));
+#endif
+#endif
+    return pdf;
 }
 
-FINLINE Float FwdScat::pdfLengthDipole(
-        const Vector &uL, const Vector &nL, const Vector &R,
-        const Vector *u0, const Vector &n0,
-        TangentPlaneMode tangentMode, Float s) const {
-    FSAssert(s >= 0);
-    Vector R_virt;
-    if (!getTentativeIndexMatchedVirtualSourceDisp(
-            n0, nL, uL, R, 0./0., tangentMode, R_virt))
-        return 0.0;
+FS_INLINE Float FwdScat::pdfExtraParamsMonopole(const Monopole &m) const {
+    Float s = *(static_cast<const Float*>(m.extraParams));
 
-    Float p1 = (lengthSample_w1 == 0 ? 0 :
-            pdfLengthShortLimit(R, u0, uL, s));
-    Float p2 = (lengthSample_w2 == 0 ? 0 :
-            0.5 * (pdfLengthLongLimit(R, uL, s)
-                 + pdfLengthLongLimit(R_virt, uL, s)));
-    Float p3 = (lengthSample_w3 == 0 ? 0 :
-            pdfLengthAbsorption(s));
+    if (s == -1)
+        return 0.0f;
+
+    FSAssert(s >= 0);
+
+    const Vector *d_inPtr = (m.hasDin() ? &m.d_in : NULL);
+    Float p1 = (lengthSample_w1 == 0 ? 0 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s));
+    Float p2 = (lengthSample_w2 == 0 ? 0 : pdfLengthLongLimit(m.R, m.d_out, s));
+    Float p3 = (lengthSample_w3 == 0 ? 0 : pdfLengthAbsorption(s));
+
+#if 0
+    Log(EWarn, "In pdf func: %e -- s %e hasDin %d  %e %e %e",
+        lengthSample_w1 * p1 + lengthSample_w2 * p2 + lengthSample_w3 * p3,
+            s,
+            m.hasDin(),
+            (lengthSample_w1 == 0 ? -1 : p1),
+            (lengthSample_w2 == 0 ? -1 : p2),
+            (lengthSample_w3 == 0 ? -1 : p3));
+
+#endif
     return lengthSample_w1 * p1
          + lengthSample_w2 * p2
          + lengthSample_w3 * p3;
@@ -566,43 +350,43 @@ FINLINE Float FwdScat::pdfLengthDipole(
  * This is the safest bet 'at infinity' (the tail is certainly more heavy
  * than the target distribution), but extremely high variance is possible
  * for high albedo materials. */
-FINLINE Float FwdScat::sampleLengthAbsorption(
+FS_INLINE Float FwdScat::sampleLengthAbsorption(
         Float &s, Sampler *sampler) const {
-    if (sigma_a == 0)
+    if (m_sigA == 0)
         return 0.0;
-    s = -log(sampler->next1D())/sigma_a;
-    Float pdf = sigma_a*exp(-sigma_a*s);
+    s = -log(sampler->next1D())/m_sigA;
+    Float pdf = m_sigA*exp(-m_sigA*s);
     FSAssert(std::isfinite(s));
     FSAssert(s >= 0);
     FSAssert(std::isfinite(pdf));
     return pdf;
 }
 
-FINLINE Float FwdScat::pdfLengthAbsorption(
+FS_INLINE Float FwdScat::pdfLengthAbsorption(
         Float s) const {
-    if (sigma_a == 0)
+    if (m_sigA == 0)
         return 0.0;
-    Float pdf = sigma_a*exp(-sigma_a*s);
+    Float pdf = m_sigA*exp(-m_sigA*s);
     FSAssert(std::isfinite(pdf));
     return pdf;
 }
 
 
-FINLINE Float FwdScat::sampleLengthShortLimit(
+FS_INLINE Float FwdScat::sampleLengthShortLimit(
         Vector R, const Vector *u0, Vector uL, Float &s, Sampler *sampler) const {
     Float pdf;
     implLengthShortLimit(R, u0, uL, s, sampler, &pdf);
     return pdf;
 }
 
-FINLINE Float FwdScat::pdfLengthShortLimit(
+FS_INLINE Float FwdScat::pdfLengthShortLimit(
         Vector R, const Vector *u0, Vector uL, Float s) const {
     Float pdf;
     implLengthShortLimit(R, u0, uL, s, NULL, &pdf);
     return pdf;
 }
 
-FINLINE void FwdScat::implLengthShortLimit(
+FS_INLINE void FwdScat::implLengthShortLimit(
         Vector R, const Vector *u0, Vector uL, Float &s, Sampler *sampler, Float *pdf) const {
     if (u0 == NULL) {
         implLengthShortLimitMargOverU0(R, uL, s, sampler, pdf);
@@ -611,7 +395,7 @@ FINLINE void FwdScat::implLengthShortLimit(
     }
 }
 
-FINLINE void FwdScat::implLengthShortLimitKnownU0(
+FS_INLINE void FwdScat::implLengthShortLimitKnownU0(
         Vector R, Vector u0, Vector uL, Float &s, Sampler *sampler, Float *pdf) const {
     double lRl = R.length();
     double r = lRl * p;
@@ -723,7 +507,7 @@ FINLINE void FwdScat::implLengthShortLimitKnownU0(
     }
 }
 
-FINLINE void FwdScat::implLengthShortLimitMargOverU0(
+FS_INLINE void FwdScat::implLengthShortLimitMargOverU0(
         Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf) const {
     const Float safetyFac = 3;
     const Float safetyWeight = 0.3;
@@ -744,7 +528,7 @@ FINLINE void FwdScat::implLengthShortLimitMargOverU0(
         *pdf = safetyWeight*pdfSafety + (1-safetyWeight)*pdfOrig;
     }
 }
-FINLINE void FwdScat::implLengthShortLimitMargOverU0_internal(
+FS_INLINE void FwdScat::implLengthShortLimitMargOverU0_internal(
         Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf, Float safetyFac) const {
     // Working in p=1, transforming back at the end
     Float lRl = R.length();
@@ -876,7 +660,7 @@ FINLINE void FwdScat::implLengthShortLimitMargOverU0_internal(
 
 
 // TODO: approximation that does not require a numerical cdf inversion?
-FINLINE Float FwdScat::sampleLengthLongLimit(
+FS_INLINE Float FwdScat::sampleLengthLongLimit(
         Vector R, Vector uL, Float &s, Sampler *sampler) const {
     if (p == 0)
         return 0;
@@ -886,7 +670,7 @@ FINLINE Float FwdScat::sampleLengthLongLimit(
     if (beta <= 0)
         return sampleLengthAbsorption(s, sampler);
     double B = beta;
-    double A = sigma_a / p;
+    double A = m_sigA / p;
     FSAssert(A>0);
     FSAssert(B>0);
     double sA = sqrt(A);
@@ -963,7 +747,7 @@ FINLINE Float FwdScat::sampleLengthLongLimit(
     return pdfLengthLongLimit(R, uL, s);
 }
 
-FINLINE Float FwdScat::pdfLengthLongLimit(
+FS_INLINE Float FwdScat::pdfLengthLongLimit(
         Vector R, Vector uL, Float s) const {
     if (p == 0)
         return 0;
@@ -973,7 +757,7 @@ FINLINE Float FwdScat::pdfLengthLongLimit(
     Float beta = 3./2. * R2minusRdotUL_p1;
     if (beta <= 0)
         return pdfLengthAbsorption(s);
-    Float a_p1 = sigma_a/p;
+    Float a_p1 = m_sigA/p;
     Float pdf_p1 = sqrt(beta/M_PI) / (s_p1*sqrt(s_p1))
             * math::fastexp(-beta/s_p1 - a_p1*s_p1 + 2*sqrt(beta*a_p1));
     if (!std::isfinite(pdf_p1)) {
@@ -987,113 +771,24 @@ FINLINE Float FwdScat::pdfLengthLongLimit(
 
 
 
-FINLINE Float _sampleHemisphere(const Vector &n_in, Vector &d_in, Sampler *sampler) {
-    /* Sample an incoming direction (on our side of the medium) on the
-     * cosine-weighted hemisphere */
-    Vector hemiSamp = warp::squareToCosineHemisphere(sampler->next2D());
-    Float pdf = warp::squareToCosineHemispherePdf(hemiSamp);
-    hemiSamp.z = -hemiSamp.z; // pointing inwards
-    d_in = Frame(n_in).toWorld(hemiSamp); // pointing inwards
-    return pdf;
+
+
+
+
+
+FS_INLINE Float FwdScat::sampleDirectionMonopole(Monopole &m, Sampler *sampler) const {
+    Float s = *(static_cast<const Float*>(m.extraParams));
+    return sampleDirectionBoundaryAwareMonopole(
+            m.d_in, m.n_in, m.d_out, m.R, s, m.isPlaneSource(), sampler);
 }
 
-FINLINE Float _pdfHemisphere(const Vector &n_in, const Vector &d_in) {
-    return INV_PI * math::abs(dot(d_in, n_in));
+FS_INLINE Float FwdScat::pdfDirectionMonopole(const Monopole &m) const {
+    Float s = *(static_cast<const Float*>(m.extraParams));
+    return pdfDirectionBoundaryAwareMonopole(
+            m.d_in, m.n_in, m.d_out, m.R, s, m.isPlaneSource());
 }
 
-
-
-
-FINLINE Float FwdScat::sampleDirectionDipole(
-        Vector &u0, const Vector &n0, const Vector &uL, const Vector &nL,
-        const Vector &R, Float s, TangentPlaneMode tangentMode,
-        bool useEffectiveBRDF, Sampler *sampler) const {
-    Vector R_virt, n0_effective;
-    Float realSourceWeight;
-    if (!getTentativeIndexMatchedVirtualSourceDisp(n0, nL, uL, R, s,
-            tangentMode, R_virt, &n0_effective, &realSourceWeight)) {
-        return 0.0f; // Won't be able to evaluate bssrdf transport anyway!
-    } else {
-        FSAssert(R_virt.isFinite());
-    }
-
-    Float pReal = -1;
-    Float pVirt = -1;
-    Float u = sampler->next1D();
-    if (u <= (1 - directionSampler_dipoleHemiWeight) * realSourceWeight) {
-        pReal = sampleDirectionBoundaryAwareMonopole(
-                u0, n0, uL, R, s, useEffectiveBRDF, sampler);
-        if (pReal == 0)
-            return 0.0f;
-    } else if (u <= (1 - directionSampler_dipoleHemiWeight)) {
-        Vector u0_virt;
-        Vector n0_virt = n0  -  2*dot(n0_effective, n0) * n0_effective;
-        pVirt = sampleDirectionBoundaryAwareMonopole(
-                u0_virt, n0_virt, uL, R_virt, s, useEffectiveBRDF, sampler);
-        if (pVirt == 0)
-            return 0.0f;
-        /* Don't forget: we have to transform back to the real u0! */
-        u0 = u0_virt  -  2*dot(n0_effective, u0_virt) * n0_effective;
-    } else {
-        _sampleHemisphere(n0, u0, sampler);
-    }
-
-    if (pReal == -1)
-        pReal = pdfDirectionBoundaryAwareMonopole(
-                u0, n0, uL, R, s, useEffectiveBRDF);
-
-    if (pVirt == -1) {
-        /* Don't forget: we have to transform to the virtual u0 to get the
-         * corresponding pdf! We also need to transform to get a 'virtual'
-         * normal n0, so that, upon transforming u0_virt to its
-         * corresponding u0, that u0 is on the correct side of the actual
-         * boundary as determined by n0. */
-        Vector u0_virt = u0  -  2*dot(n0_effective, u0) * n0_effective;
-        Vector n0_virt = n0  -  2*dot(n0_effective, n0) * n0_effective;
-        pVirt = pdfDirectionBoundaryAwareMonopole(
-                u0_virt, n0_virt, uL, R_virt, s, useEffectiveBRDF);
-    }
-
-    Float pHemi = _pdfHemisphere(n0, u0);
-
-    return (1 - directionSampler_dipoleHemiWeight)
-                * (realSourceWeight * pReal + (1.0 - realSourceWeight) * pVirt)
-            + directionSampler_dipoleHemiWeight * pHemi;
-}
-
-FINLINE Float FwdScat::pdfDirectionDipole(
-        const Vector &u0, const Vector &n0, const Vector &uL, const Vector &nL,
-        const Vector &R, Float s, TangentPlaneMode tangentMode,
-        bool useEffectiveBRDF) const {
-    Vector R_virt, n0_effective;
-    Float realSourceWeight;
-    if (!getTentativeIndexMatchedVirtualSourceDisp(n0, nL, uL, R, s,
-            tangentMode, R_virt, &n0_effective, &realSourceWeight)) {
-        return 0.0f; // Won't be able to evaluate bssrdf transport anyway!
-    } else {
-        FSAssert(R_virt.isFinite());
-    }
-
-    Float pReal, pVirt, pHemi;
-
-    pReal = pdfDirectionBoundaryAwareMonopole(
-            u0, n0, uL, R, s, useEffectiveBRDF);
-
-    Vector u0_virt = u0  -  2*dot(n0_effective, u0) * n0_effective;
-    Vector n0_virt = n0  -  2*dot(n0_effective, n0) * n0_effective;
-    pVirt = pdfDirectionBoundaryAwareMonopole(
-            u0_virt, n0_virt, uL, R_virt, s, useEffectiveBRDF);
-
-    pHemi = _pdfHemisphere(n0, u0);
-
-    return (1 - directionSampler_dipoleHemiWeight)
-                * (realSourceWeight * pReal + (1.0 - realSourceWeight) * pVirt)
-            + directionSampler_dipoleHemiWeight * pHemi;
-}
-
-
-
-FINLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole_BRDF(
+FS_INLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole_BRDF(
         const Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
         Float s) const {
     Float pdf;
@@ -1103,7 +798,7 @@ FINLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole_BRDF(
     return pdf;
 }
 
-FINLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_BRDF(
+FS_INLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_BRDF(
         Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
         Float s, Sampler *sampler) const {
     Float pdf;
@@ -1124,7 +819,7 @@ FINLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_BRDF(
 
 // if sampler is NULL: read u0 and set the pdf (should not be NULL)
 // if sampler is not NULL: sample u0 and set the pdf (if it isn't NULL)
-FINLINE void FwdScat::implDirectionBoundaryAwareMonopole_BRDF(
+FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_BRDF(
         Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
         Float s, Sampler *sampler, Float *pdf) const {
     /* Note to self: n0==nL is no longer guaranteed here, because if we are
@@ -1256,7 +951,7 @@ FINLINE void FwdScat::implDirectionBoundaryAwareMonopole_BRDF(
 
 
 
-FINLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole(
+FS_INLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole(
         Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
         Float s, bool useEffectiveBRDF, Sampler *sampler) const {
 
@@ -1283,7 +978,7 @@ FINLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole(
     return p1 * directionSampler_origWeight + p2 * (1 - directionSampler_origWeight);
 }
 
-FINLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole(
+FS_INLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole(
         const Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
         Float s, bool useEffectiveBRDF) const {
 
@@ -1300,7 +995,7 @@ FINLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole(
 }
 
 
-FINLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_orig(
+FS_INLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_orig(
         Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
         Float s, Sampler *sampler) const {
     FSAssert(math::abs(uL.length() - 1) < Epsilon);
@@ -1543,7 +1238,7 @@ FINLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_orig(
 }
 
 // TODO combine pdf and sampler with an 'impl' style function
-FINLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole_orig(
+FS_INLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole_orig(
         const Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
         Float s) const {
 
@@ -1652,7 +1347,7 @@ FINLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole_orig(
  * given, otherwise simply returns pdf of given cosTheta.
  * Assumption: a >= 0 and the returned cosine is constrained within [-1..0]
  * Returns pdf(cos(theta)). */
-FINLINE double sampleExpSinCos_dCos(double a, double b, double &cosTheta, Sampler *sampler) {
+FS_INLINE double sampleExpSinCos_dCos(double a, double b, double &cosTheta, Sampler *sampler) {
     SFSAssert(a >= -Epsilon);
     // TODO; better blend based on relative magnitudes of a and b...
     Float laplaceWeight = (a < Epsilon) ? 0.00 : 0.49;
@@ -1707,7 +1402,7 @@ FINLINE double sampleExpSinCos_dCos(double a, double b, double &cosTheta, Sample
 
 /* Sample phi with weight: exp(a * cos(phi))
  * Returns: pdf(phi) */
-FINLINE double sampleExpCos_dPhi(double a, double &phi, Sampler *sampler) {
+FS_INLINE double sampleExpCos_dPhi(double a, double &phi, Sampler *sampler) {
     /* Sample phi:
      * weight: exp(a * cos(phi))
      * -> expand cos(phi) up to second order:
@@ -1764,7 +1459,7 @@ FINLINE double sampleExpCos_dPhi(double a, double &phi, Sampler *sampler) {
 
 
 
-FINLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_bis(
+FS_INLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_bis(
         Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
         Float s, Sampler *sampler) const {
 
@@ -1786,7 +1481,7 @@ FINLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_bis(
     return pdf;
 }
 
-FINLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole_bis(
+FS_INLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole_bis(
         const Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
         Float s) const {
 
@@ -1808,7 +1503,7 @@ FINLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole_bis(
  * (The '_orig' version is the one that was described in the SIGGRAPH2017
  * paper)
  * */
-FINLINE void FwdScat::implDirectionBoundaryAwareMonopole_bis(
+FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_bis(
         Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
         Float s, Sampler *sampler, Float *pdf) const {
     if (pdf)

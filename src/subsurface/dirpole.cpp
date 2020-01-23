@@ -209,7 +209,7 @@ public:
         return transport;
     }
 
-    virtual Spectrum sampleBssrdfDirection(const Scene *scene,
+    virtual Float sampleBssrdfDirection(const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             Intersection &its_in,        Vector       &d_in,
             const void *extraParams, const Spectrum &throughput,
@@ -219,7 +219,7 @@ public:
                 throughput, sampler);
     }
 
-    virtual Spectrum pdfBssrdfDirection(const Scene *scene,
+    virtual Float pdfBssrdfDirection(const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector &d_in,
             const void *extraParams, const Spectrum &throughput) const {

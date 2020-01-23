@@ -25,6 +25,8 @@
 #include <boost/math/tools/roots.hpp>
 #include "../medium/materials.h"
 
+#include <iomanip>
+
 MTS_NAMESPACE_BEGIN
 
 /* Debugging flag to dump information on which sampling steps are the
@@ -900,7 +902,7 @@ size_t DirectSamplingSubsurface::extraParamsSize() const {
 }
 
 
-Spectrum DirectSamplingSubsurface::sampleBssrdfDirection(const Scene *scene,
+Float DirectSamplingSubsurface::sampleBssrdfDirection(const Scene *scene,
         const Intersection &its_out, const Vector &d_out,
         Intersection       &its_in,  Vector       &d_in,
         const void *extraParams, const Spectrum &throughput,
@@ -915,7 +917,7 @@ Spectrum DirectSamplingSubsurface::sampleBssrdfDirection(const Scene *scene,
 
 #ifdef MTS_DSS_PDF_CHECK
     Float pdf2 = pdfBssrdfDirection(scene, its_out, d_out, its_in,
-            d_in, extraParams, throughput).average();
+            d_in, extraParams, throughput);
     if (fabs((pdf - pdf2)/(pdf + pdf2)) > ShadowEpsilon)
         SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
                 pdf, pdf2, pdf/pdf2);
@@ -923,22 +925,24 @@ Spectrum DirectSamplingSubsurface::sampleBssrdfDirection(const Scene *scene,
 
 #if !MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
     if (dot(d_in, its_in.shFrame.n) > 0)
-        return Spectrum(0.0); // protect against roundoff errors
+        return 0; // protect against roundoff errors
 #endif
 
-    return Spectrum(pdf);
+    return pdf;
 }
 
-Spectrum DirectSamplingSubsurface::pdfBssrdfDirection(const Scene *scene,
+Float DirectSamplingSubsurface::pdfBssrdfDirection(const Scene *scene,
         const Intersection &its_out, const Vector &d_out,
         const Intersection &its_in,  const Vector &d_in,
         const void *extraParams, const Spectrum &throughput) const {
     Vector n_in = its_in.shFrame.n;
+    Assert(math::abs(d_in.length() - 1) < Epsilon);
+    Assert(math::abs(n_in.length() - 1) < Epsilon);
 #if MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
     return Spectrum(INV_PI * math::abs(dot(d_in, n_in)));
 #else
     Assert(-dot(d_in, n_in) >= 0);
-    return Spectrum(INV_PI * (-dot(d_in, n_in)));
+    return INV_PI * (-dot(d_in, n_in));
 #endif
 }
 
@@ -950,17 +954,18 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
         Intersection       &its_in,  Vector       &d_in,
         Vector &rec_wi,
         EMeasure &bsdfMeasure,
-        Spectrum &pdf_d_in_and_rec_wi,
+        Float &pdf_d_in_and_rec_wi,
         const Spectrum &throughput,
         const void *extraParams,
         Sampler *sampler) const {
 
     /* Let the bssrdf sample the direction */
-    Spectrum d_in_pdf = sampleBssrdfDirection(
+    Float d_in_pdf = sampleBssrdfDirection(
             scene, its_out, d_out, its_in, d_in, extraParams,
             throughput, sampler);
-    if (d_in_pdf.isZero())
+    if (d_in_pdf == 0)
         return Spectrum(0.0f);
+    Assert(!((its_in.wi - its_in.toLocal(d_in)).length() > Epsilon));
     Assert(MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
             || dot(d_in, its_in.shFrame.n) <= 0);
 
@@ -987,11 +992,11 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
 
     pdf_d_in_and_rec_wi = d_in_pdf * rec_wi_pdf;
 #ifdef MTS_DSS_PDF_CHECK
-    Spectrum pdf2 = pdfDirectionsFromBssrdf(scene, its_out, d_out, its_in,
+    Float pdf2 = pdfDirectionsFromBssrdf(scene, its_out, d_out, its_in,
             d_in, rec_wi, bsdfMeasure, throughput, extraParams);
     Float relErr = fabs(
-              (pdf_d_in_and_rec_wi.average() - pdf2.average())
-            / (pdf_d_in_and_rec_wi.average() + pdf2.average()));
+              (pdf_d_in_and_rec_wi - pdf2)
+            / (pdf_d_in_and_rec_wi + pdf2));
     if (relErr > ShadowEpsilon)
         SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
                 pdf_d_in_and_rec_wi.average(), pdf2.average(),
@@ -1000,7 +1005,7 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
     return bsdfVal;
 }
 
-Spectrum DirectSamplingSubsurface::pdfDirectionsFromBssrdf(
+Float DirectSamplingSubsurface::pdfDirectionsFromBssrdf(
         const Scene *scene,
         const Intersection &its_out, const Vector &d_out,
         const Intersection &its_in,  const Vector &d_in,
@@ -1009,11 +1014,13 @@ Spectrum DirectSamplingSubsurface::pdfDirectionsFromBssrdf(
         const Spectrum &throughput,
         const void *extraParams) const {
     Assert(bsdfMeasure != EInvalidMeasure);
-    Spectrum d_in_pdf = pdfBssrdfDirection(
+    Assert(!((its_in.wi - its_in.toLocal(d_in)).length() > Epsilon));
+
+    Float d_in_pdf = pdfBssrdfDirection(
             scene, its_out, d_out, its_in, d_in, extraParams,
             throughput);
-    if (d_in_pdf.isZero())
-        return Spectrum(0.0f);
+    if (d_in_pdf == 0)
+        return 0;
 
     BSDFSamplingRecord bRec(its_in, its_in.toLocal(d_in),
             its_in.toLocal(rec_wi), ERadiance);
@@ -1225,7 +1232,7 @@ Spectrum DirectSamplingSubsurface::sampleIndirect(
     if (extraParamsPdf.isZero())
         return Spectrum(0.0f);
 
-    Spectrum pdf_d_in_and_rec_wi;
+    Float pdf_d_in_and_rec_wi;
 
     /* Sample incoming directions d_in&rec_wi based on its_in and
      * extraParams */
@@ -1245,8 +1252,8 @@ Spectrum DirectSamplingSubsurface::sampleIndirect(
 
 #ifdef MTS_DSS_PDF_CHECK
     Float pdf2 = pdfIndirect(scene, its_in, its_out, d_out,
-            effectiveThroughput, d_in, rec_wi, extraParams,
-            bsdfMeasure).average();
+            effectiveThroughput * extraParamsPdf.zeroMask(),
+            d_in, rec_wi, extraParams, bsdfMeasure).average();
     Float relErr = fabs( (thePdf.average() - pdf2)
                        / (thePdf.average() + pdf2) );
     if (relErr > ShadowEpsilon)
@@ -1273,7 +1280,7 @@ Spectrum DirectSamplingSubsurface::pdfIndirect(const Scene *scene,
     if (extraParamsPdf.isZero())
         return Spectrum(0.0f);
 
-    Spectrum pdf_d_in_and_rec_wi = pdfDirectionsFromBssrdf(
+    Float pdf_d_in_and_rec_wi = pdfDirectionsFromBssrdf(
             scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
             effectiveThroughput * extraParamsPdf.zeroMask(),
             extraParams);
@@ -1316,7 +1323,7 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
     Spectrum check_extraParamsPdf = pdfExtraParams(
             scene, its_out, d_out, check_its_in, NULL, throughput,
             check_extraParams);
-    Spectrum check_pdf_d_in_and_rec_wi = pdfDirectionsFromBssrdf(
+    Float check_pdf_d_in_and_rec_wi = pdfDirectionsFromBssrdf(
             scene, its_out, d_out, check_its_in,
             check_d_in, check_rec_wi, check_bsdfMeasure, throughput,
             check_extraParams);
@@ -1324,7 +1331,7 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
         cerr << "check_surfacePdf was zero!" << endl;
     if (check_extraParamsPdf.isZero())
         cerr << "check_extraParamsPdf was zero!" << endl;
-    if (check_pdf_d_in_and_rec_wi.isZero())
+    if (check_pdf_d_in_and_rec_wi == 0)
         cerr << "check_pdf_d_in_and_rec_wi was zero!" << endl;
 
 
@@ -1363,7 +1370,7 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
 
         /* Sample incoming directions d_in&rec_wi based on its_in and
          * extraParams */
-        Spectrum pdf_d_in_and_rec_wi;
+        Float pdf_d_in_and_rec_wi;
         Spectrum bsdfVal = sampleDirectionsFromBssrdf(
                 scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
                 pdf_d_in_and_rec_wi, throughput, extraParams, sampler);
@@ -1431,7 +1438,7 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
 
         /* Sample incoming directions d_in&rec_wi based on its_in and
          * extraParams */
-        Spectrum pdf_d_in_and_rec_wi;
+        Float pdf_d_in_and_rec_wi;
         Spectrum bsdfVal = sampleDirectionsFromBssrdf(
                 scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
                 pdf_d_in_and_rec_wi, throughput, extraParams, sampler);
@@ -1495,7 +1502,7 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
             i++) {
         /* Sample incoming directions d_in&rec_wi based on its_in and
          * extraParams */
-        Spectrum pdf_d_in_and_rec_wi;
+        Float pdf_d_in_and_rec_wi;
         Spectrum bsdfVal = sampleDirectionsFromBssrdf(
                 scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
                 pdf_d_in_and_rec_wi, throughput, constExtraParams, sampler);
@@ -1566,7 +1573,7 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
          * close to unity. Small values lead to fireflies! */
         <<" sur: "<<check_surfacePdf / idealSurfacePdf
         <<", ex: " << check_extraParamsPdf.average() / idealExtraParamsPdf
-        <<", dir: " << check_pdf_d_in_and_rec_wi.average() / idealDirectionPdf
+        <<", dir: " << check_pdf_d_in_and_rec_wi / idealDirectionPdf
         /* Relative errors of the ideal pdf estimators themselves.
          * Order:
          *    full integral = surface & extraparams & directions

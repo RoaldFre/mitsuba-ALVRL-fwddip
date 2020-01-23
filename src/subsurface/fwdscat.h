@@ -2,7 +2,7 @@
 #if !defined(__MITSUBA_MEDIUM_FWDSCAT_H_)
 #define __MITSUBA_MEDIUM_FWDSCAT_H_
 
-#include <mitsuba/mitsuba.h>
+#include <mitsuba/render/dipoleModel.h>
 
 MTS_NAMESPACE_BEGIN
 
@@ -17,109 +17,85 @@ MTS_NAMESPACE_BEGIN
 #endif
 
 
-class MTS_EXPORT FwdScat final : public Object {
-public:
-    MTS_DECLARE_CLASS();
 
-    FwdScat(Float g, Float sigmaS, Float sigmaA, Float eta) :
-                mu(1 - g),
-                sigma_s(sigmaS),
-                sigma_a(sigmaA),
-                p(0.5 * sigmaS * (1 - g)),
-                m_eta(eta) {
+
+class MTS_EXPORT_RENDER FwdScat final : public DipoleModel {
+public:
+    FwdScat(Float sigS, Float sigA, Float g, Float eta,
+            int channel, const Properties &props) :
+                DipoleModel(sigS, sigA, g, eta, channel, props),
+                p(0.5 * sigS * (1 - g)) { 
         if (g < 0 || g >= 1) {
             Log(EError, "Valid values for g are in [0,1). "
                     "Sensible values are close to 1.");
         }
     }
 
+    FwdScat(Stream *stream, InstanceManager *manager) :
+            DipoleModel(stream, manager),
+            p(stream->readFloat()) { }
+
+    void serialize(Stream *stream, InstanceManager *manager) const {
+        DipoleModel::serialize(stream, manager);
+        stream->writeFloat(p);
+    }
+
     std::string toString() const {
         std::ostringstream oss;
-        oss << "FwdScat[mu="<<mu
-                <<", sigma_s="<<sigma_s
-                <<", sigma_a="<<sigma_a
+        oss << "FwdScat[sigma_s="<<m_sigS
+                <<", sigma_a="<<m_sigA
                 <<", p="<<p
                 <<", eta="<<m_eta
                 <<"]";
         return oss.str();
     }
 
-    enum TangentPlaneMode {
-        EUnmodifiedIncoming,
-        EUnmodifiedOutgoing,
-        EFrisvadEtAl,
-        EFrisvadEtAlWithMeanNormal,
-    };
+    size_t extraParamsSize() const {
+        return sizeof(Float); // only param is length
+    }
 
-    enum DipoleMode {
-        EReal = 1,
-        EVirt = 2,
-        ERealAndVirt = EReal | EVirt,
-    };
+    virtual Float getRequestedDirectionalCosineHemisphereWeight() const {
+        return 0.1;
+    }
 
-    enum ZvMode {
-        EClassicDiffusion, /// As in the original Jensen et al. dipole
-        EBetterDipoleZv,   /// As in the better dipole model of d'Eon
-        EFrisvadEtAlZv,    /// As in the directional dipole model of Frisvad et al.
-    };
-
-    Float evalDipole(
-            Normal n0, Vector u0, Normal nL, Vector uL, Vector R, Float length,
-            bool rejectInternalIncoming, bool reciprocal,
-            TangentPlaneMode tangentMode, ZvMode zvMode,
-            bool useEffectiveBRDF = false,
-            DipoleMode dipoleMode = ERealAndVirt) const;
-
-    /// Returns the sample weight
-    Float sampleLengthDipole(
-            const Vector &uL, const Vector &nL, const Vector &R,
-            const Vector *u0, const Vector &n0,
-            TangentPlaneMode tangentMode, Float &s, Sampler *sampler) const;
-    Float pdfLengthDipole(
-            const Vector &uL, const Vector &nL, const Vector &R,
-            const Vector *u0, const Vector &n0,
-            TangentPlaneMode tangentMode, Float s) const;
-
-    /// Returns the pdf
-    Float sampleDirectionDipole(
-            Vector &u0, const Vector &n0, const Vector &uL, const Vector &nL,
-            const Vector &R, Float s, TangentPlaneMode tangentMode,
-            bool useEffectiveBRDF, Sampler *sampler) const;
-    Float pdfDirectionDipole(
-            const Vector &u0, const Vector &n0, const Vector &uL, const Vector &nL,
-            const Vector &R, Float s, TangentPlaneMode tangentMode,
-            bool useEffectiveBRDF) const;
+    virtual Float evalMonopole(const Monopole &m) const;
 
     Float evalMonopole(Vector u0, Vector uL, Vector R, Float length) const;
 
     Float evalPlaneSource(Vector u0, Vector uL,
             Vector n, Float Rz, Float length) const;
 
+
+    virtual Float sampleExtraParamsMonopole(
+            const Monopole &m, void *extraParams, Sampler *sampler) const;
+
+    virtual Float pdfExtraParamsMonopole(const Monopole &m) const;
+
+    virtual Float sampleDirectionMonopole(Monopole &m, Sampler *sampler) const;
+
+    virtual Float pdfDirectionMonopole(const Monopole &m) const;
+
+    virtual Float realSourceWeight_margOverParamsAndDirections(
+            const Monopole &real, const Monopole &virt) const {
+        return 0.5; // TODO
+    }
+
+    virtual Float realSourceWeight_margOverParams(
+            const Monopole &real, const Monopole &virt) const {
+        return 0.5; // TODO
+    }
+
+    virtual Float realSourceWeight_margOverDirections(
+            const Monopole &real, const Monopole &virt) const {
+        return 0.5; // TODO
+    }
+
+
+
 protected:
     void calcValues(double length, double &C, double &D, double &E, double &F,
             double *Z=NULL) const;
     double absorptionAndNormalizationConstant(Float theLength) const;
-
-    bool getVirtualDipoleSource(
-            Normal n0, Vector u0,
-            Normal nL, Vector uL,
-            Vector R, Float length,
-            bool rejectInternalIncoming,
-            TangentPlaneMode tangentMode,
-            ZvMode zvMode,
-            Vector &u0_virt, Vector &R_virt,
-            Vector *optional_n0_effective = NULL) const;
-
-    bool getTentativeIndexMatchedVirtualSourceDisp(
-            Normal n0,
-            Normal nL, Vector uL,
-            Vector R,
-            Float s,
-            TangentPlaneMode tangentMode,
-            Vector &R_virt,
-            Vector *optional_n0_effective = NULL,
-            Float *optional_realSourceRelativeWeight = NULL) const;
-
 
     /// Returns the pdf
     Float sampleLengthShortLimit(
@@ -186,18 +162,9 @@ protected:
             Vector &u0, const Vector &n0, const Vector &uL, const Vector &R,
             Float s, Sampler *sampler, Float *pdf) const;
 
-    const Float mu; /// Gaussian angle phase function standard deviation
-    const Float sigma_s; /// Scattering coefficient of medium
-    const Float sigma_a; /// Absorption coefficient of medium
     const Float p;  /// Inverse length scale of forward scattering model
 
-    /**
-     * Bit of a hack for index-MISmatched dipole configurations. This makes
-     * the dipole refract its directions and change the virtual source
-     * displacement (as determined by the Zvmode). This are 'implicit'
-     * boundary conditions, as opposed to an explicit 'index matched'
-     * (m_eta = 1) coupling to a proper BSDF as boundary.  */
-    const Float m_eta;
+    MTS_DECLARE_CLASS();
 };
 
 MTS_NAMESPACE_END
