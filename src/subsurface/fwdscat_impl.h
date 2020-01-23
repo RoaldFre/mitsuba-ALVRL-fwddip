@@ -1531,15 +1531,16 @@ FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_bis(
     }
 
     Vector3d x_unnorm = H - z*dot(z,H);
-    if (x_unnorm.length() <= Epsilon * H.length()) {
-        /* any frame will do; a will go to 0 and the sampling will be
+    double x_unnormLen = x_unnorm.length();
+    if (x_unnormLen == 0) {
+        /* Any frame will do; a will go to 0 and the sampling will be
          * uniform where needed (e.g. phi sampling) */
         Frame f(n0); // n0 = 'Vector(z)'
-        /* TODO when compiled for single precision: this will not be
-         * orthogonal up to double precision (single not tested...)!: */
         x_unnorm = Vector3d(f.s);
     }
-    const Vector3d x = normalize(x_unnorm);
+    const Vector3d x_rough = x_unnorm / x_unnormLen;
+    // Refine again to improve numerical robustness in case H and z(=n0) are almost parallel
+    const Vector3d x = normalize(x_rough - z*dot(z,x_rough));
     const Vector3d y = cross(x, z);
     FSAssert(math::abs(dot(x,y)) < Epsilon);
     FSAssert(math::abs(dot(x,z)) < Epsilon);
