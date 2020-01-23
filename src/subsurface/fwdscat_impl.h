@@ -140,6 +140,12 @@ FS_INLINE void FwdScat::calcValues(double length, double &C, double &D,
     if (Z_ptr)
         *Z_ptr = Z;
 
+    FSAssert(std::isfinite(C));
+    FSAssert(std::isfinite(D));
+    FSAssert(std::isfinite(E));
+    FSAssert(std::isfinite(F));
+    FSAssert(std::isfinite(Z));
+
     FSAssert(C >= 0);
     FSAssert(D >= 0);
     FSAssert(E >= 0);
@@ -247,7 +253,8 @@ static constexpr Float lengthSample_w3 = 0.0; /* absorption */
 
 
 /**
- * Sample length. Unsuccessful sampling sets the length to -1. */
+ * Sample length. Unsuccessful sampling sets the length to -1.
+ * We reject zero-length samples because this gives issues down the road. */
 FS_INLINE Float FwdScat::sampleExtraParamsMonopole(
         const Monopole &m, void *extraParams, Sampler *sampler) const {
     FSAssert(m.extraParams == extraParams);
@@ -259,19 +266,19 @@ FS_INLINE Float FwdScat::sampleExtraParamsMonopole(
     const Float u = sampler->next1D();
     if (u < lengthSample_w1) {
         p1 = sampleLengthShortLimit(m.R, d_inPtr, m.d_out, s, sampler);
-        if (p1 == 0) {
+        if (p1 == 0 || s == 0) {
             s = -1;
             return 0.0f;
         }
     } else if (u < lengthSample_w1 + lengthSample_w2) {
         p2 = sampleLengthLongLimit(m.R, m.d_out, s, sampler);
-        if (p2 == 0) {
+        if (p2 == 0 || s == 0) {
             s = -1;
             return 0.0f;
         }
     } else if (u < lengthSample_w1 + lengthSample_w2 + lengthSample_w3) {
         p3 = sampleLengthAbsorption(s, sampler);
-        if (p3 == 0) {
+        if (p3 == 0 || s == 0) {
             s = -1;
             return 0.0f;
         }
@@ -300,16 +307,6 @@ FS_INLINE Float FwdScat::sampleExtraParamsMonopole(
                 (lengthSample_w2 == 0 ? -1 : pdfLengthLongLimit(m.R, m.d_out, s)),
                 (lengthSample_w3 == 0 ? -1 : pdfLengthAbsorption(s)));
     }
-#if 0
-    else
-        Log(EWarn, "consistent pdfs: %e %e, rel %f  -- s %e hasDin %d  %e %e %e",
-                pdf, pdfCheck, (pdf-pdfCheck)/pdf,
-                s,
-                m.hasDin(),
-                (lengthSample_w1 == 0 ? -1 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s)),
-                (lengthSample_w2 == 0 ? -1 : pdfLengthLongLimit(m.R, m.d_out, s)),
-                (lengthSample_w3 == 0 ? -1 : pdfLengthAbsorption(s)));
-#endif
 #endif
     return pdf;
 }

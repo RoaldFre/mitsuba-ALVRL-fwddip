@@ -837,9 +837,11 @@ Float ProjSurfaceSampler::sample(const Intersection &its,
             * math::abs(dot(n_geo, projectionDir));
 #ifdef MTS_DSS_PDF_CHECK
     Float pdf2 = pdf(its, d_out, scene, shapes, newIts, channel);
-    if (fabs((thePdf - pdf2)/thePdf) > ShadowEpsilon) {
-        Log(EWarn, "PDF problem! %e vs %e, rel: %e",
-                thePdf, pdf2, thePdf/pdf2);
+    Float relError = fabs((thePdf - pdf2)/thePdf);
+    if (relError > 1e-1) { // inherently very sensitive/tricky sampling problem sometimes
+        Log(EWarn, "PDF problem! %e vs %e, rel: %e, x %s",
+                thePdf, pdf2, thePdf/pdf2,
+                x.toString().c_str());
     }
 #endif
     return thePdf;
@@ -916,11 +918,11 @@ Float DirectSamplingSubsurface::sampleBssrdfDirection(const Scene *scene,
     d_in = its_in.toWorld(hemiSamp); // pointing inwards
 
 #ifdef MTS_DSS_PDF_CHECK
-    Float pdf2 = pdfBssrdfDirection(scene, its_out, d_out, its_in,
+    Float pdf2 = DirectSamplingSubsurface::pdfBssrdfDirection(scene, its_out, d_out, its_in,
             d_in, extraParams, throughput);
     if (fabs((pdf - pdf2)/(pdf + pdf2)) > ShadowEpsilon)
-        SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
-                pdf, pdf2, pdf/pdf2);
+        SLog(EWarn, "Inconsistent pdfs: %e vs %e, relDiff %e",
+                pdf, pdf2, (pdf-pdf2)/(pdf+pdf2));
 #endif
 
 #if !MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
@@ -999,7 +1001,7 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
             / (pdf_d_in_and_rec_wi + pdf2));
     if (relErr > ShadowEpsilon)
         SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
-                pdf_d_in_and_rec_wi.average(), pdf2.average(),
+                pdf_d_in_and_rec_wi, pdf2,
                 relErr);
 #endif
     return bsdfVal;
@@ -1092,7 +1094,7 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsDirect(
             d_in, rec_wi, bsdfMeasure);
     Float relErr = fabs(
               (pdf_d_in_and_rec_wi.average() - pdf2.average())
-            / (pdf_d_in_and_rec_wi.average() + pdf2.average());
+            / (pdf_d_in_and_rec_wi.average() + pdf2.average()));
     if (relErr > ShadowEpsilon)
         SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
                 pdf_d_in_and_rec_wi.average(), pdf2.average(),
@@ -2227,15 +2229,18 @@ void DSSProjFrame::getProjFrame(Vector &u, Vector &v, Vector &projDir,
         case ENormalSide: {
             Vector norm,fwd,side;
             norm = n_out;
-            if (math::abs(dot(d_out,norm)) > 1 - Epsilon) {
-                /* Forward direction badly conditioned -- just pick *some*
-                 * directions */
+            // forward (along planar d_out component), unnormalized:
+            Vector fwd_unnorm = d_out - norm*dot(d_out,norm);
+            Float fwd_unnormLen = fwd_unnorm.length();
+            if (fwd_unnormLen == 0) {
+                /* Perfect rotationaly symmetry. Just pick *some* directions */
                 Frame normalFrame(norm);
                 fwd  = normalFrame.s;
                 side = normalFrame.t;
             } else {
-                // forward (along planar d_out component)
-                fwd  = normalize(d_out - norm*dot(d_out,norm));
+                // normalize forward direction and refine again for numerical stability
+                Vector fwd_rough = fwd_unnorm/fwd_unnormLen;
+                fwd  = normalize(fwd_rough - norm*dot(fwd_rough,norm));
                 // side (sign does not matter because of symmetry)
                 side = cross(norm,fwd);
             }
