@@ -896,10 +896,7 @@ public:
      * appropriate (non-unity) value */
     Spectrum Li(const Scene *scene, Sampler *sampler,
             const Intersection &its, const Vector &d,
-            const Spectrum &throughput, int &splits, int depth) const {
-        return Li_internal(
-                scene, sampler, its, d, throughput, splits, depth, 0);
-    }
+            const Spectrum &throughput, int &splits, int depth) const;
 
     bool supportsLi() const {
         return true;

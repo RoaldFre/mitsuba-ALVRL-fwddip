@@ -1599,6 +1599,13 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
         << endl;
 }
 
+Spectrum DirectSamplingSubsurface::Li(const Scene *scene, Sampler *sampler,
+        const Intersection &its, const Vector &d,
+        const Spectrum &throughput, int &splits, int depth) const {
+    avgNumSplits.incrementBase();
+    return Li_internal(
+            scene, sampler, its, d, throughput, splits, depth, 0);
+}
 
 /* Query Li(its_out,d) at intersection its_out. Sample new query point on
  * the surface of our shape with associated intersection its_in from which
@@ -1695,7 +1702,6 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
                 numSplitsHere = integrator->getRR().split(
                         splits, newThroughput, 1.0, sampler);
             }
-            avgNumSplits.incrementBase();
             avgNumSplits += numSplitsHere;
 
 #if MTS_DSS_CHECK_VARIANCE_SOURCES
