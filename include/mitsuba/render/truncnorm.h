@@ -4,6 +4,8 @@
  * Code directly based on work of Jonathan Olmsted:
  * https://github.com/olmjo/RcppTN
  * http://olmjo.com/computing/RcppTN/
+ * With some additions for numerical stability and efficiency in limit 
+ * cases.
  */
 
 #include <mitsuba/core/platform.h>
@@ -117,7 +119,9 @@ inline Float truncnormPdf(const Float _mean,
         if (std::isfinite(c_stdlo7)) /* add seperately only when finite to avoid NaNs */
               pdfDenom += (c_stdlo6 - c_stdlo4 + 3*c_stdlo2 - 15) /* correction for c_stdlo != -infinity */
                             * c_stdhi7/c_stdlo7 * exp(0.5*(c_stdhi*c_stdhi - c_stdlo*c_stdlo));
-        pdf = -c_stdhi7 * exp(0.5*(c_stdhi*c_stdhi - c_stdz*c_stdz)) / pdfDenom;
+        //double expArg = 0.5*(c_stdhi*c_stdhi - c_stdz*c_stdz); // we lose half of our digits if both are close together...
+        double expArg = c_stdz*(c_stdhi - c_stdz) + 0.5*(c_stdhi - c_stdz)*(c_stdhi - c_stdz); // numerically more stable!
+        pdf = -c_stdhi7 * exp(0.5*(expArg)) / pdfDenom;
         pdf /= sd; // transform back to non-standard setting
         SAssert(!(pdf < 0));
         if (!std::isfinite(pdf)) {
@@ -139,21 +143,22 @@ inline Float stdnorm(Sampler *sampler) {
 }
 
 
-/// Check if simpler subalgorithm is appropriate.
-inline bool CheckSimple(const Float low, ///< lower bound of distribution
-                        const Float high ///< upper bound of distribution
-                        ) {
-  // Init Values Used in Inequality of Interest
-  Float val1 = (2 * sqrt(exp(1))) / (low + sqrt(pow(low, 2) + 4));
-  Float val2 = exp((pow(low, 2) - low * sqrt(pow(low, 2) + 4)) / (4)) ;
-  //
+/// Check if we shoud do AR from an exponential instead of from a uniform distribution
+inline bool CheckRejectFromExponentialInsteadOfUniform(
+        const Float low, ///< lower bound of distribution
+        const Float high ///< upper bound of distribution
+        ) {
+    Float offset;
+    if (low > 1e3) {
+        Float val1 = (2 * sqrt(exp(1))) / (low + sqrt(low*low + 4));
+        Float val2 = exp((low*low - low * sqrt(low*low + 4)) / 4);
+        offset = val1 * val2;
+    } else {
+        // Series expansion for stability
+        offset = 1/low - 1./2.*pow(low,-3) + 5./8.*pow(low, -5);
+    }
 
-  // Test if Simple is Preferred
-  if (high > low + val1 * val2) {
-    return true ;
-  } else {
-    return false ;
-  }
+    return high > low + offset;
 }
 
 
@@ -437,7 +442,7 @@ inline Float truncnorm(const Float mean,
             c_sd = -1 * c_sd ; // hack to get two negative signs to cancel out
         }
 
-        if (CheckSimple(c_stdlow, c_stdhigh)) {
+        if (CheckRejectFromExponentialInsteadOfUniform(c_stdlow, c_stdhigh)) {
             while (valid == 0) {
                 draw = UseAlg2(c_stdlow, sampler) ;
                 // use the simple
