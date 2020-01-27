@@ -41,6 +41,46 @@ MTS_NAMESPACE_BEGIN
  * otherwise... (TODO) */
 #define MTS_DSS_USE_RADIANCE_SOURCES true
 
+#define WARN_INCONSISTENT_PDFS false /* Warn about inconsistent pdfs? */
+#define WARN_INCONSISTENT_PDFS_THRESHOLD 1e-2 /* Relative error threshold to warn */
+#define REJECT_INCONSISTENT_PDFS false /* Reject sampling with inconsistent pdfs? */
+#define REJECT_INCONSISTENT_PDFS_THRESHOLD 1e-1 /* Relative error threshold to reject */
+
+#if WARN_INCONSISTENT_PDFS || REJECT_INCONSISTENT_PDFS
+#  define check_pdf_consistency(loc, p1, p2)      _check_pdf_consistency(loc, p1, p2)
+#  define check_pdf_consistency_t(loc, p1, p2, t) _check_pdf_consistency(loc, p1, p2, t)
+#else
+#  define check_pdf_consistency(loc, p1, p2)      true
+#  define check_pdf_consistency_t(loc, p1, p2, t) true
+#endif
+
+inline static bool _check_pdf_consistency(const char* location,
+        Float pdf1, Float pdf2,
+        Float warnThreshold = WARN_INCONSISTENT_PDFS_THRESHOLD) {
+    Float absRelErr = fabs((pdf1 - pdf2)/(pdf1 + pdf2));
+    if (WARN_INCONSISTENT_PDFS && absRelErr > warnThreshold)
+        SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e @ %s",
+                pdf1, pdf2, absRelErr, location);
+    if (REJECT_INCONSISTENT_PDFS && absRelErr > REJECT_INCONSISTENT_PDFS_THRESHOLD)
+        return false; /* Should reject */
+    return true;
+}
+inline static bool _check_pdf_consistency(const char* location,
+        Spectrum pdf1, Spectrum pdf2,
+        Float warnThreshold = WARN_INCONSISTENT_PDFS_THRESHOLD) {
+    /* Alternatively: fabs(((pdf1-pdf2)/(pdf1+pdf2)).average() */
+    Float absRelErr = fabs( (pdf1.average() - pdf2.average())
+                           /(pdf1.average() + pdf2.average()));
+    if (WARN_INCONSISTENT_PDFS && absRelErr > warnThreshold)
+        SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e @ %s",
+                pdf1.average(), pdf2.average(),
+                absRelErr, location);
+    if (REJECT_INCONSISTENT_PDFS && absRelErr > REJECT_INCONSISTENT_PDFS_THRESHOLD)
+        return false; /* Should reject */
+    return true;
+}
+
+
 
 static StatsCounter avgNumSplits("Direct Sampling Subsurface",
         "Average number of internal-reflection path splits", EAverage);
@@ -551,12 +591,10 @@ Float WeightIntersectionSampler::sample(
     n_geo = newIts.geoFrame.n;
     SAssert(std::isfinite(intersectionProb) && intersectionProb > 0);
     SAssert(!n_geo.isZero());
-#ifdef MTS_DSS_PDF_CHECK
-    Float pdf2 = pdf(intersections, newIts, its_out, d_out, channel);
-    if (fabs((intersectionProb - pdf2)/(intersectionProb + pdf2)) > ShadowEpsilon)
-        SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
-                intersectionProb, pdf2, intersectionProb/pdf2);
-#endif
+
+    if (!check_pdf_consistency("weightIts", intersectionProb,
+            pdf(intersections, newIts, its_out, d_out, channel)))
+        return 0;;
     return intersectionProb;
 }
 
@@ -835,15 +873,12 @@ Float ProjSurfaceSampler::sample(const Intersection &its,
     /* Pdf in area measure of the surface of the object */
     Float thePdf = planePdf * intersectionProb
             * math::abs(dot(n_geo, projectionDir));
-#ifdef MTS_DSS_PDF_CHECK
-    Float pdf2 = pdf(its, d_out, scene, shapes, newIts, channel);
-    Float relError = fabs((thePdf - pdf2)/thePdf);
-    if (relError > 1e-1) { // inherently very sensitive/tricky sampling problem sometimes
-        Log(EWarn, "PDF problem! %e vs %e, rel: %e, x %s",
-                thePdf, pdf2, thePdf/pdf2,
-                x.toString().c_str());
-    }
-#endif
+
+    if (!check_pdf_consistency_t("projSurface", thePdf,
+            pdf(its, d_out, scene, shapes, newIts, channel),
+            0.2 /* Allow rather big error because inherently difficult sampling */))
+        return 0;
+
     return thePdf;
 }
 
@@ -917,13 +952,10 @@ Float DirectSamplingSubsurface::sampleBssrdfDirection(const Scene *scene,
     its_in.wi = hemiSamp;
     d_in = its_in.toWorld(hemiSamp); // pointing inwards
 
-#ifdef MTS_DSS_PDF_CHECK
-    Float pdf2 = DirectSamplingSubsurface::pdfBssrdfDirection(scene, its_out, d_out, its_in,
-            d_in, extraParams, throughput);
-    if (fabs((pdf - pdf2)/(pdf + pdf2)) > ShadowEpsilon)
-        SLog(EWarn, "Inconsistent pdfs: %e vs %e, relDiff %e",
-                pdf, pdf2, (pdf-pdf2)/(pdf+pdf2));
-#endif
+    if (!check_pdf_consistency("BSSRDF direction", pdf,
+            DirectSamplingSubsurface::pdfBssrdfDirection(scene, its_out, d_out, its_in,
+            d_in, extraParams, throughput)))
+        return 0;
 
 #if !MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
     if (dot(d_in, its_in.shFrame.n) > 0)
@@ -993,17 +1025,12 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
     rec_wi = its_in.toWorld(bRec.wo);
 
     pdf_d_in_and_rec_wi = d_in_pdf * rec_wi_pdf;
-#ifdef MTS_DSS_PDF_CHECK
-    Float pdf2 = pdfDirectionsFromBssrdf(scene, its_out, d_out, its_in,
-            d_in, rec_wi, bsdfMeasure, throughput, extraParams);
-    Float relErr = fabs(
-              (pdf_d_in_and_rec_wi - pdf2)
-            / (pdf_d_in_and_rec_wi + pdf2));
-    if (relErr > ShadowEpsilon)
-        SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
-                pdf_d_in_and_rec_wi, pdf2,
-                relErr);
-#endif
+
+    if (!check_pdf_consistency("directionsFromBSSRDF", pdf_d_in_and_rec_wi,
+            pdfDirectionsFromBssrdf(scene, its_out, d_out, its_in,
+            d_in, rec_wi, bsdfMeasure, throughput, extraParams)))
+        return Spectrum(0.0f);
+
     return bsdfVal;
 }
 
@@ -1051,7 +1078,7 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsDirect(
     Float lightCosineFactor = dot(dRec.d, n_in);
     if (LiDirectWeighted.isZero() || lightCosineFactor <= 0) {
         /* light is outside of our medium */
-        return Spectrum(0.0);
+        return Spectrum(0.0f);
     }
     lightSamplingMeasure = dRec.measure;
 
@@ -1089,17 +1116,10 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsDirect(
     d_in = its_in.toWorld(bRec.wo);
     pdf_d_in_and_rec_wi = Spectrum(d_in_pdf * rec_wi_pdf);
 
-#ifdef MTS_DSS_PDF_CHECK
-    Spectrum pdf2 = pdfDirectionsDirect(scene, its_out, d_out, its_in,
-            d_in, rec_wi, bsdfMeasure);
-    Float relErr = fabs(
-              (pdf_d_in_and_rec_wi.average() - pdf2.average())
-            / (pdf_d_in_and_rec_wi.average() + pdf2.average()));
-    if (relErr > ShadowEpsilon)
-        SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
-                pdf_d_in_and_rec_wi.average(), pdf2.average(),
-                relErr);
-#endif
+    if (!check_pdf_consistency("sampleDirectionsDirect", pdf_d_in_and_rec_wi,
+            pdfDirectionsDirect(scene, its_out, d_out, its_in,
+            d_in, rec_wi, bsdfMeasure)))
+        return Spectrum(0.0f);
 
     return bsdfVal;
 }
@@ -1185,16 +1205,10 @@ Spectrum DirectSamplingSubsurface::sampleDirect(
 
     Spectrum thePdf = pdf_d_in_and_rec_wi * extraParamsPdf;
 
-#ifdef MTS_DSS_PDF_CHECK
-    Float pdf2 = pdfDirect(scene, its_in, its_out, d_out,
-            effectiveThroughput, d_in, rec_wi, extraParams,
-            bsdfMeasure).average();
-    Float relErr = fabs( (thePdf.average() - pdf2)
-                       / (thePdf.average() + pdf2) );
-    if (relErr > ShadowEpsilon)
-        SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
-                thePdf.average(), pdf2, relErr);
-#endif
+    if (!check_pdf_consistency("sampleDirect", thePdf,
+                pdfDirect(scene, its_in, its_out, d_out, effectiveThroughput,
+                d_in, rec_wi, extraParams, bsdfMeasure)))
+        return Spectrum(0.f);
 
     return thePdf;
 }
@@ -1252,16 +1266,11 @@ Spectrum DirectSamplingSubsurface::sampleIndirect(
 
     Spectrum thePdf = pdf_d_in_and_rec_wi * extraParamsPdf;
 
-#ifdef MTS_DSS_PDF_CHECK
-    Float pdf2 = pdfIndirect(scene, its_in, its_out, d_out,
-            effectiveThroughput * extraParamsPdf.zeroMask(),
-            d_in, rec_wi, extraParams, bsdfMeasure).average();
-    Float relErr = fabs( (thePdf.average() - pdf2)
-                       / (thePdf.average() + pdf2) );
-    if (relErr > ShadowEpsilon)
-        SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e",
-                thePdf.average(), pdf2, relErr);
-#endif
+    if (!check_pdf_consistency("sampleIndirect", thePdf,
+                    pdfIndirect(scene, its_in, its_out, d_out,
+                            effectiveThroughput * extraParamsPdf.zeroMask(),
+                            d_in, rec_wi, extraParams, bsdfMeasure)))
+        return Spectrum(0.f);
 
     return thePdf;
 }
