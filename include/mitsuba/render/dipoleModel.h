@@ -125,8 +125,7 @@ struct MTS_EXPORT_RENDER DipoleConfig {
  */
 class MTS_EXPORT_RENDER DipoleModel : public SerializableObject {
 public:
-    DipoleModel(Float sigS, Float sigA, Float g, Float eta,
-            int channel, const Properties &props) :
+    DipoleModel(Float sigS, Float sigA, Float g, Float eta, const Properties &props) :
                 m_sigS(sigS), m_sigA(sigA), m_g(g), m_eta(eta) { }
 
     DipoleModel(Stream *stream, InstanceManager *manager) :
@@ -277,7 +276,7 @@ public:
             m_dipoles.resize(SPECTRUM_SAMPLES);
         }
         for (size_t i = 0; i < m_dipoles.size(); i++) {
-            m_dipoles[i] = new DipMod(m_sigmaS[i], m_sigmaA[i], m_g[i], eta, i, props);
+            m_dipoles[i] = new DipMod(m_sigmaS[i], m_sigmaA[i], m_g[i], eta, props);
         }
 
         m_dirHemiWeight = m_dipoles[0]->getRequestedDirectionalCosineHemisphereWeight();

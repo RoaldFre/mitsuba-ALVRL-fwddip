@@ -21,9 +21,8 @@ MTS_NAMESPACE_BEGIN
 
 class MTS_EXPORT_RENDER FwdScat final : public DipoleModel {
 public:
-    FwdScat(Float sigS, Float sigA, Float g, Float eta,
-            int channel, const Properties &props) :
-                DipoleModel(sigS, sigA, g, eta, channel, props),
+    FwdScat(Float sigS, Float sigA, Float g, Float eta, const Properties &props) :
+                DipoleModel(sigS, sigA, g, eta, props),
                 p(0.5 * sigS * (1 - g)) { 
         if (g < 0 || g >= 1) {
             Log(EError, "Valid values for g are in [0,1). "
