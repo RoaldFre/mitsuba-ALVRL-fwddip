@@ -126,7 +126,10 @@ struct MTS_EXPORT_RENDER DipoleConfig {
 class MTS_EXPORT_RENDER DipoleModel : public SerializableObject {
 public:
     DipoleModel(Float sigS, Float sigA, Float g, Float eta, const Properties &props) :
-                m_sigS(sigS), m_sigA(sigA), m_g(g), m_eta(eta) { }
+                m_sigS(sigS), m_sigA(sigA), m_g(g), m_eta(eta) {
+        if (g < -1 || g > 1)
+            Log(EError, "Invalid value for g: %f, should be in (-1,1)", m_g);
+    }
 
     DipoleModel(Stream *stream, InstanceManager *manager) :
             SerializableObject(stream, manager) {

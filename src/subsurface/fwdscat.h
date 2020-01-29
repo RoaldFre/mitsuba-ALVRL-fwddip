@@ -19,7 +19,7 @@ MTS_NAMESPACE_BEGIN
 
 
 
-class MTS_EXPORT_RENDER FwdScat final : public DipoleModel {
+class MTS_EXPORT FwdScat final : public DipoleModel {
 public:
     FwdScat(Float sigS, Float sigA, Float g, Float eta, const Properties &props) :
                 DipoleModel(sigS, sigA, g, eta, props),

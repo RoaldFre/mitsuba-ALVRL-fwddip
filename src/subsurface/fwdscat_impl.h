@@ -294,9 +294,9 @@ FS_INLINE Float FwdScat::sampleExtraParamsMonopole(
     Float pdf = (lengthSample_w1 * p1
                + lengthSample_w2 * p2
                + lengthSample_w3 * p3);
+
+    FSAssert(pdf > 0);
 #ifdef MTS_FWDSCAT_DEBUG
-    if (pdf == 0)
-        return 0;
     Float pdfCheck = pdfExtraParamsMonopole(m);
     if (math::abs(pdf-pdfCheck)/pdf > 1e-3) {
         Log(EWarn, "Inconsistent pdfs: %e %e, rel %f  -- s %e hasDin %d  %e %e %e",
