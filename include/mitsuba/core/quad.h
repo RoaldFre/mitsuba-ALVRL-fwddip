@@ -297,6 +297,184 @@ protected:
     Float m_absError, m_relError;
 };
 
+
+/* Defined in header to allow subexpression elimination when we are called 
+ * in a loop over l. Hopefully, a sufficiently smart compiler will 
+ * recognise the internal recursion and optimize this away over the 
+ * external loop. */
+FINLINE float legendreP(int l, float x_) {
+    SAssert(l >= 0);
+
+    if (l == 0) {
+        return (float) 1.0f;
+    } else if (l == 1) {
+        return x_;
+    } else {
+        /* Evaluate the recurrence in double precision */
+        double x = (double) x_;
+        double Lppred = 1.0, Lpred = x, Lcur = 0.0;
+
+        for (int k = 2; k <= l; ++k) {
+            Lcur = ((2*k-1) * x * Lpred - (k - 1) * Lppred) / k;
+            Lppred = Lpred; Lpred = Lcur;
+        }
+
+        return (float) Lcur;
+    }
+}
+
+FINLINE double legendreP(int l, double x) {
+    SAssert(l >= 0);
+
+    if (l == 0) {
+        return (double) 1.0f;
+    } else if (l == 1) {
+        return x;
+    } else {
+        double Lppred = 1.0, Lpred = x, Lcur = 0.0;
+
+        for (int k = 2; k <= l; ++k) {
+            Lcur = ((2*k-1) * x * Lpred - (k - 1) * Lppred) / k;
+            Lppred = Lpred; Lpred = Lcur;
+        }
+
+        return Lcur;
+    }
+}
+
+FINLINE std::pair<float, float> legendrePD(int l, float x_) {
+    SAssert(l >= 0);
+
+    if (l == 0) {
+        return std::make_pair((float) 1.0f, (float) 0.0f);
+    } else if (l == 1) {
+        return std::make_pair(x_, (float) 1.0f);
+    } else {
+        /* Evaluate the recurrence in double precision */
+        double x = (double) x_;
+        double Lppred = 1.0, Lpred = x, Lcur = 0.0,
+               Dppred = 0.0, Dpred = 1.0, Dcur = 0.0;
+
+        for (int k = 2; k <= l; ++k) {
+            Lcur = ((2*k-1) * x * Lpred - (k - 1) * Lppred) / k;
+            Dcur = Dppred + (2*k-1) * Lpred;
+            Lppred = Lpred; Lpred = Lcur;
+            Dppred = Dpred; Dpred = Dcur;
+        }
+
+        return std::make_pair((float) Lcur, (float) Dcur);
+    }
+}
+
+FINLINE std::pair<double, double> legendrePD(int l, double x) {
+    SAssert(l >= 0);
+
+    if (l == 0) {
+        return std::make_pair(1.0, 0.0);
+    } else if (l == 1) {
+        return std::make_pair(x, 1.0);
+    } else {
+        double Lppred = 1.0, Lpred = x, Lcur = 0.0,
+               Dppred = 0.0, Dpred = 1.0, Dcur = 0.0;
+
+        for (int k = 2; k <= l; ++k) {
+            Lcur = ((2*k-1) * x * Lpred - (k - 1) * Lppred) / k;
+            Dcur = Dppred + (2*k-1) * Lpred;
+            Lppred = Lpred; Lpred = Lcur;
+            Dppred = Dpred; Dpred = Dcur;
+        }
+
+        return std::make_pair(Lcur, Dcur);
+    }
+}
+
+/// Evaluate the function legendrePD(l+1, x) - legendrePD(l-1, x)
+FINLINE static std::pair<double, double> legendreQ(int l, double x) {
+    SAssert(l >= 1);
+
+    if (l == 1) {
+        return std::make_pair(0.5 * (3*x*x-1) - 1, 3*x);
+    } else {
+        /* Evaluate the recurrence in double precision */
+        double Lppred = 1.0, Lpred = x, Lcur = 0.0,
+               Dppred = 0.0, Dpred = 1.0, Dcur = 0.0;
+
+        for (int k = 2; k <= l; ++k) {
+            Lcur = ((2*k-1) * x * Lpred - (k-1) * Lppred) / k;
+            Dcur = Dppred + (2*k-1) * Lpred;
+            Lppred = Lpred; Lpred = Lcur;
+            Dppred = Dpred; Dpred = Dcur;
+        }
+
+        double Lnext = ((2*l+1) * x * Lpred - l * Lppred) / (l+1);
+        double Dnext = Dppred + (2*l+1) * Lpred;
+
+        return std::make_pair(Lnext - Lppred, Dnext - Dppred);
+    }
+}
+
+FINLINE double legendreP(int l, int m, double x) {
+    double p_mm = 1;
+
+    if (m > 0) {
+        double somx2 = std::sqrt((1 - x) * (1 + x));
+        double fact = 1;
+        for (int i=1; i<=m; i++) {
+            p_mm *= (-fact) * somx2;
+            fact += 2;
+        }
+    }
+
+    if (l == m)
+        return p_mm;
+
+    double p_mmp1 = x * (2*m + 1) * p_mm;
+    if (l == m+1)
+        return p_mmp1;
+
+    double p_ll = 0;
+    for (int ll=m+2; ll <= l; ++ll) {
+        p_ll = ((2*ll-1)*x*p_mmp1 - (ll+m-1) * p_mm) / (ll-m);
+        p_mm = p_mmp1;
+        p_mmp1 = p_ll;
+    }
+
+    return p_ll;
+}
+
+FINLINE float legendreP(int l, int m, float x) {
+    /* Evaluate the recurrence in double precision */
+    double p_mm = 1;
+
+    if (m > 0) {
+        double somx2 = std::sqrt((1 - x) * (1 + x));
+        double fact = 1;
+        for (int i=1; i<=m; i++) {
+            p_mm *= (-fact) * somx2;
+            fact += 2;
+        }
+    }
+
+    if (l == m)
+        return (float) p_mm;
+
+    double p_mmp1 = x * (2*m + 1) * p_mm;
+    if (l == m+1)
+        return (float) p_mmp1;
+
+    double p_ll = 0;
+    for (int ll=m+2; ll <= l; ++ll) {
+        p_ll = ((2*ll-1)*x*p_mmp1 - (ll+m-1) * p_mm) / (ll-m);
+        p_mm = p_mmp1;
+        p_mmp1 = p_ll;
+    }
+
+    return (float) p_ll;
+}
+
+
+
+
 //! @}
 // -----------------------------------------------------------------------
 
