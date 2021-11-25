@@ -237,6 +237,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(Stream *stream,
     m_sourcesIndex = stream->readInt();
     m_sourcesResID = -1;
     m_itsDistanceCutoff = stream->readFloat();
+    m_maxInternalReflections = stream->readInt();
     /* Note: serialize gets called before preprocess, so we can't pass
      * m_nonCollimatedLightSourcesPresent information here. So for safety: */
     m_nonCollimatedLightSourcesPresent = true;
@@ -254,6 +255,7 @@ void DirectSamplingSubsurface::serialize(Stream *stream,
     stream->writeFloat(m_eta);
     stream->writeInt(m_sourcesIndex);
     stream->writeFloat(m_itsDistanceCutoff);
+    stream->writeInt(m_maxInternalReflections);
     /* Note: serialize gets called before preprocess, so we can't pass
      * m_nonCollimatedLightSourcesPresent information here. */
 }

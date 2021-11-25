@@ -312,6 +312,13 @@ FS_INLINE Float FwdScat::sampleExtraParamsMonopole(
 }
 
 FS_INLINE Float FwdScat::pdfExtraParamsMonopole(const Monopole &m) const {
+    if (m.extraParams == NULL) {
+        /* Seems to get called through wakeup() with non-initialized 
+         * monopole (TODO figure that out properly). */
+        Log(EWarn, "Called pdfExtraParamsMonopole with NULL extraParams!");
+        return 0;
+    }
+
     Float s = *(static_cast<const Float*>(m.extraParams));
 
     if (s == -1)
