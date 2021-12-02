@@ -115,6 +115,51 @@ public:
         return bitmap;
     }
 
+
+    void mergeBitmaps(const std::vector<ref<Bitmap>> &bitmaps, ref<Bitmap> &result, size_t numToDrop=0,
+            size_t beginIdx = 0, size_t endIdx = (size_t)-1) {
+        size_t numBitmaps = bitmaps.size();
+
+        if (endIdx == (size_t)-1)
+            endIdx = numBitmaps;
+
+        Log(EInfo, "Got %d bitmaps, merge %d - %d, drop %d",
+                numBitmaps, beginIdx, endIdx, numToDrop);
+
+        if (beginIdx >= endIdx)
+            Log(EError, "Cannot merge <= 0 bitmaps!");
+        size_t numToMerge = endIdx - beginIdx;
+
+        if (numToDrop >= numToMerge)
+            Log(EError, "Cannot drop %d samples when I only have to merge %d bitmaps!",
+                    numToDrop, numToMerge);
+
+        // make sure we don't lose precision in accumulation -> convert to doubles
+        result = result->convert(result->getPixelFormat(), Bitmap::EFloat64);
+
+        size_t nEntries =
+            (size_t) bitmaps[0]->getSize().x *
+            (size_t) bitmaps[0]->getSize().y *
+            bitmaps[0]->getChannelCount();
+
+        std::vector<double> samples(numToMerge);
+        for (size_t i=0; i<nEntries; ++i) {
+            for (size_t b=0; b<numToMerge; b++)
+                samples[b] = bitmaps[beginIdx + b]->getFloat64Data()[i];
+            std::sort(samples.begin(), samples.end()); 
+            /* note: full sort is somewhat overkill for cutting the 
+             * top and bottom part, but it *does* make the following 
+             * addition numerically robust! */
+            double avg = 0;
+            for (size_t j = numToDrop; j < numToMerge-numToDrop; j++) {
+                avg += samples[j];
+            }
+            avg = avg / (numToMerge - 2*numToDrop);
+
+            result->getFloat64Data()[i] = avg;
+        }
+    }
+
     int run(int argc, char **argv) {
         ref<FileResolver> fileResolver = Thread::getThread()->getFileResolver();
         int optchar;
@@ -463,21 +508,53 @@ public:
                 }
                 size_t numBitmaps = bitmaps.size();
                 size_t numToDrop;
+
                 if (numBitmaps < 3) {
                     Log(EWarn, "Requested robust merging, but could not "
                             "load at least 3 bitmaps! (loaded %d bitmaps)! "
                             "WILL NOT DROP ANY OUTLIERS!",
                             numBitmaps);
                     numToDrop = 0;
-                } else {
-                    numToDrop = std::max((size_t)1,(size_t)(0.5 + numBitmaps * robustFraction));
-                    Assert(numToDrop <= numBitmaps/2);
                 }
-                if (numToDrop == numBitmaps/2  &&  numToDrop >= 1)
+
+                /* We have the least amount of bias when our pixel 
+                 * distributions are as symmetrical as possible (as close 
+                 * to a gaussian as possible), according to CLT, this 
+                 * happens in the limit of N->infty. If we get 
+                 * robustFraction == -1, then we automatically merge all 
+                 * bitmaps into three sets from which we only use the 
+                 * median value. We can hack that in here by pre-merging 
+                 * the bitmaps into 3 merged ones. */
+                if (robustFraction == -1) {
+                    Log(EInfo, "Merging all %d bitmaps into three sets and "
+                            "taking median for minimum bias.", numBitmaps);
+                    std::vector<ref<Bitmap> > mergedBitmaps(3);
+                    for (size_t i = 0; i < mergedBitmaps.size(); i++) {
+                        mergedBitmaps[i] = new Bitmap(
+                                input->getPixelFormat(), Bitmap::EFloat64,
+                                input->getSize(), input->getChannelCount());
+                    }
+                    size_t numToMerge = numBitmaps / 3 + 0.5;
+
+                    mergeBitmaps(bitmaps, mergedBitmaps[0], 0,            0,   numToMerge);
+                    mergeBitmaps(bitmaps, mergedBitmaps[1], 0,   numToMerge, 2*numToMerge);
+                    mergeBitmaps(bitmaps, mergedBitmaps[2], 0, 2*numToMerge,   numBitmaps);
+                    /* Just pretend like we were given our 3 merged bitmaps */
+                    bitmaps = mergedBitmaps;
+                    numBitmaps = 3;
+                    numToDrop = 1;
+                } else {
+                    /* 'Regular' dropping of samples out of all input bitmaps */
+                    numToDrop = std::max((size_t)1,(size_t)(0.5 + numBitmaps * robustFraction));
+                }
+                Assert(numToDrop <= numBitmaps/2);
+
+                if (numBitmaps - 2*numToDrop <= 0)
                     numToDrop--;
                 Log(EInfo, "Requested robust merging: dropping %d lowest and %d highest samples out of %d",
                         numToDrop, numToDrop, numBitmaps);
 
+                mergeBitmaps(bitmaps, input, numToDrop); // original input gets overwritten 
                 size_t nEntries =
                     (size_t) input->getSize().x *
                     (size_t) input->getSize().y *
@@ -487,14 +564,15 @@ public:
                 for (size_t i=0; i<nEntries; ++i) {
                     for (size_t b=0; b<numBitmaps; b++)
                         samples[b] = bitmaps[b]->getFloat64Data()[i];
-                    std::sort(samples.begin(), samples.end()); // note: full sort is overkill...
+                    std::sort(samples.begin(), samples.end()); 
+                    /* note: full sort is somewhat overkill for cutting the 
+                     * top and bottom part, but it *does* make the following 
+                     * addition numerically robust! */
                     double avg = 0;
                     for (size_t j = numToDrop; j < numBitmaps-numToDrop; j++) {
                         avg += samples[j];
                     }
                     avg = avg / (numBitmaps - 2*numToDrop);
-
-                    input->getFloat64Data()[i] = avg; // original input gets overwritten
                 }
             }
 
