@@ -76,6 +76,8 @@ MTS_NAMESPACE_BEGIN
  *     \parameter{noInternalReflection}{\Boolean}{
  *         If set to \code{true}, then reflections towards the side with
  *         the higher IOR will be ignored. \default{\code{false}}}}
+ *     \parameter{noTransmission}{\Boolean}{
+ *         If set to \code{true}, then only reflections are allowed. \default{\code{false}}}}
  * }\vspace{4mm}
  *
  * This plugin implements a realistic microfacet scattering model for rendering
@@ -193,6 +195,7 @@ public:
             props.getSpectrum("specularTransmittance", Spectrum(1.0f)));
         m_noExternalReflection = props.getBoolean("noExternalReflection", false);
         m_noInternalReflection = props.getBoolean("noInternalReflection", false);
+        m_noTransmission = props.getBoolean("noTransmission", false);
 
         /* Specifies the internal index of refraction at the interface */
         Float intIOR = lookupIOR(props, "intIOR", "bk7");
@@ -228,6 +231,7 @@ public:
         m_specularTransmittance = static_cast<Texture *>(manager->getInstance(stream));
         m_noExternalReflection = stream->readBool();
         m_noInternalReflection = stream->readBool();
+        m_noTransmission = stream->readBool();
         m_eta = stream->readFloat();
         m_invEta = 1 / m_eta;
 
@@ -245,6 +249,7 @@ public:
         manager->serialize(stream, m_specularTransmittance.get());
         stream->writeBool(m_noExternalReflection);
         stream->writeBool(m_noInternalReflection);
+        stream->writeBool(m_noTransmission);
         stream->writeFloat(m_eta);
     }
 
@@ -298,7 +303,8 @@ public:
             H = normalize(bRec.wo+bRec.wi);
         } else {
             /* Stop if this component was not requested */
-            if ((bRec.component != -1 && bRec.component != 1)
+            if (m_noTransmission
+                || (bRec.component != -1 && bRec.component != 1)
                 || !(bRec.typeMask & EGlossyTransmission))
                 return Spectrum(0.0f);
 
@@ -351,6 +357,8 @@ public:
 
             return m_specularReflectance->eval(bRec.its) * value;
         } else {
+            if (m_noTransmission)
+                return Spectrum(0.0f);
             Float eta = Frame::cosTheta(bRec.wi) > 0.0f ? m_eta : m_invEta;
 
             /* Calculate the total amount of transmission */
@@ -373,6 +381,9 @@ public:
     Float pdf(const BSDFSamplingRecord &bRec, EMeasure measure) const {
         if (measure != ESolidAngle)
             return 0.0f;
+
+        /* TODO: be smart in combination with m_noTransmission! (quick and 
+         * dirty hack atm!) */
 
         /* Determine the type of interaction */
         bool hasReflection   = ((bRec.component == -1 || bRec.component == 0)
@@ -515,6 +526,11 @@ public:
 
             weight *= m_specularReflectance->eval(bRec.its);
         } else {
+            /* TODO: be smart in combination with m_noTransmission! (quick and 
+             * dirty hack atm!) */
+            if (m_noTransmission)
+                return Spectrum(0.0f);
+
             if (cosThetaT == 0)
                 return Spectrum(0.0f);
 
@@ -628,6 +644,9 @@ public:
             if (cosThetaT == 0)
                 return Spectrum(0.0f);
 
+            if (m_noTransmission)
+                return Spectrum(0.0f);
+
             /* Perfect specular transmission based on the microfacet normal */
             bRec.wo = refract(bRec.wi, m, m_eta, cosThetaT);
             bRec.eta = cosThetaT < 0 ? m_eta : m_invEta;
@@ -716,6 +735,7 @@ private:
     bool m_sampleVisible;
     bool m_noExternalReflection;
     bool m_noInternalReflection;
+    bool m_noTransmission;
 };
 
 /* Fake glass shader -- it is really hopeless to visualize
