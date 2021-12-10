@@ -119,6 +119,7 @@ class VolumetricPathTracer : public MonteCarloIntegrator {
 protected:
     bool m_explicitSubsurfBoundary;
     bool m_onlyPathsThatEnteredAVolume;
+    bool m_dumpLuminanceOfSamples; // quick hack for data gathering
 
     /* Paths that enter medium should have {at least, at most} this number 
      * of medium scatterings (-1 to disable, bounds are inclusive): */
@@ -131,6 +132,7 @@ public:
         m_minMediumScatteringChain = props.getInteger("minMediumScatteringChain", -1);
         m_maxMediumScatteringChain = props.getInteger("maxMediumScatteringChain", -1);
         m_explicitSubsurfBoundary = props.getBoolean("explicitSubsurfBoundary", true);
+        m_dumpLuminanceOfSamples = props.getBoolean("dumpLuminanceOfSamples", false);
 
         if (m_minMediumScatteringChain >= 0 && m_maxMediumScatteringChain >= 0
                 && m_minMediumScatteringChain > m_maxMediumScatteringChain) {
@@ -146,6 +148,7 @@ public:
         m_minMediumScatteringChain = stream->readInt();
         m_maxMediumScatteringChain = stream->readInt();
         m_explicitSubsurfBoundary = stream->readBool();
+        m_dumpLuminanceOfSamples = false; // ... this hack is not very useful remotely...
     }
 
     void serialize(Stream *stream, InstanceManager *manager) const {
@@ -175,6 +178,13 @@ public:
         bool hasEnteredAVolume = false;
         Spectrum Li = LiPathSteps(ray, rRec, eta, internalThroughput, 
                 mediumInteractionChain, hasEnteredAVolume, initial_n);
+
+        if (m_dumpLuminanceOfSamples) {
+            cerr.precision(std::numeric_limits<double>::max_digits10);
+            cerr << std::scientific;
+            cerr << Li.getLuminance() << endl;
+        }
+
         return Li;
     }
 
