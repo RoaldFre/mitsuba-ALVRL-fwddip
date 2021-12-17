@@ -170,6 +170,7 @@ public:
             props.getSpectrum("specularTransmittance", Spectrum(1.0f)));
         m_noExternalReflection = props.getBoolean("noExternalReflection", false);
         m_noInternalReflection = props.getBoolean("noInternalReflection", false);
+        m_noTransmission = props.getBoolean("noTransmission", false);
     }
 
     SmoothDielectric(Stream *stream, InstanceManager *manager)
@@ -180,6 +181,7 @@ public:
         m_invEta = 1 / m_eta;
         m_noExternalReflection = stream->readBool();
         m_noInternalReflection = stream->readBool();
+        m_noTransmission = stream->readBool();
         configure();
     }
 
@@ -191,6 +193,7 @@ public:
         manager->serialize(stream, m_specularTransmittance.get());
         stream->writeBool(m_noExternalReflection);
         stream->writeBool(m_noInternalReflection);
+        stream->writeBool(m_noTransmission);
     }
 
     void configure() {
@@ -240,7 +243,7 @@ public:
     Spectrum eval(const BSDFSamplingRecord &bRec, EMeasure measure) const {
         bool sampleReflection   = (bRec.typeMask & EDeltaReflection)
                 && (bRec.component == -1 || bRec.component == 0) && measure == EDiscrete;
-        bool sampleTransmission = (bRec.typeMask & EDeltaTransmission)
+        bool sampleTransmission = !m_noTransmission && (bRec.typeMask & EDeltaTransmission)
                 && (bRec.component == -1 || bRec.component == 1) && measure == EDiscrete;
 
         Float cosThetaT;
@@ -278,7 +281,7 @@ public:
     Float pdf(const BSDFSamplingRecord &bRec, EMeasure measure) const {
         bool sampleReflection   = (bRec.typeMask & EDeltaReflection)
                 && (bRec.component == -1 || bRec.component == 0) && measure == EDiscrete;
-        bool sampleTransmission = (bRec.typeMask & EDeltaTransmission)
+        bool sampleTransmission = !m_noTransmission && (bRec.typeMask & EDeltaTransmission)
                 && (bRec.component == -1 || bRec.component == 1) && measure == EDiscrete;
 
         Float cosThetaT;
@@ -311,7 +314,7 @@ public:
     Spectrum sample(BSDFSamplingRecord &bRec, Float &pdf, const Point2 &sample) const {
         bool sampleReflection   = (bRec.typeMask & EDeltaReflection)
                 && (bRec.component == -1 || bRec.component == 0);
-        bool sampleTransmission = (bRec.typeMask & EDeltaTransmission)
+        bool sampleTransmission = !m_noTransmission && (bRec.typeMask & EDeltaTransmission)
                 && (bRec.component == -1 || bRec.component == 1);
 
         Float cosThetaT;
@@ -388,7 +391,7 @@ public:
     Spectrum sample(BSDFSamplingRecord &bRec, const Point2 &sample) const {
         bool sampleReflection   = (bRec.typeMask & EDeltaReflection)
                 && (bRec.component == -1 || bRec.component == 0);
-        bool sampleTransmission = (bRec.typeMask & EDeltaTransmission)
+        bool sampleTransmission = !m_noTransmission && (bRec.typeMask & EDeltaTransmission)
                 && (bRec.component == -1 || bRec.component == 1);
 
         Float cosThetaT;
@@ -486,6 +489,7 @@ private:
     ref<Texture> m_specularReflectance;
     bool m_noExternalReflection;
     bool m_noInternalReflection;
+    bool m_noTransmission;
 };
 
 /* Fake glass shader -- it is really hopeless to visualize
