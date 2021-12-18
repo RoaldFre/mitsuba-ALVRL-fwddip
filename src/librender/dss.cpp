@@ -183,6 +183,9 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     m_maxInternalReflections = props.getInteger(
             "maxInternalReflections", -1);
 
+    m_noRecursiveSubsurf = props.getBoolean(
+            "noRecursiveSubsurf", false);
+
     /* Don't consider incoming surface points that are more absorption
      * lengths away from the outgoing query point than this factor. */
     Float cutoffNumAbsorptionLengths = props.getFloat(
@@ -238,6 +241,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(Stream *stream,
     m_sourcesResID = -1;
     m_itsDistanceCutoff = stream->readFloat();
     m_maxInternalReflections = stream->readInt();
+    m_noRecursiveSubsurf = stream->readBool();
     /* Note: serialize gets called before preprocess, so we can't pass
      * m_nonCollimatedLightSourcesPresent information here. So for safety: */
     m_nonCollimatedLightSourcesPresent = true;
@@ -256,6 +260,7 @@ void DirectSamplingSubsurface::serialize(Stream *stream,
     stream->writeInt(m_sourcesIndex);
     stream->writeFloat(m_itsDistanceCutoff);
     stream->writeInt(m_maxInternalReflections);
+    stream->writeBool(m_noRecursiveSubsurf);
     /* Note: serialize gets called before preprocess, so we can't pass
      * m_nonCollimatedLightSourcesPresent information here. */
 }
@@ -1765,7 +1770,7 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
             RayDifferential ray(p_in, rec_wi, its_out.time);
 
             /* Get separate direct contribution if required. */
-            RadianceQueryRecord::ERadianceQuery integratorQuery; // 'the rest'
+            int integratorQuery; // 'the rest'
             if (m_directSampling) {
                 Spectrum wgt = indirectSample.weightForDirectContrib;
                 Assert(m_directSamplingMIS || wgt.isZero()); // !MIS => wgt==0
@@ -1808,6 +1813,10 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
 #endif
 
             // Get the actual indirect contribution from the integrator
+            if (m_noRecursiveSubsurf) {
+                // DEBUG TEST (to see if this fixes the fireflies with nontriv (eta!=1) boundary bsdf!!)
+                integratorQuery &= ~RadianceQueryRecord::ESubsurfaceRadiance;
+            }
             rRec.recursiveQuery(rRecBase, integratorQuery, thisWeight);
             Spectrum Li = integrator->Li(ray, rRec);
             result += Li * thisWeight;

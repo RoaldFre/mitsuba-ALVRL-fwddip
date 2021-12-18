@@ -1187,6 +1187,7 @@ protected:
     bool m_allowIncomingOutgoingDirections;
     bool m_nonCollimatedLightSourcesPresent;
     int m_maxInternalReflections; /// Maximum number of subsequent internal reflections (<0 for unbounded)
+    bool m_noRecursiveSubsurf; /// For debug: don't include subsurf Li in recursive query
     ref_vector<const SurfaceSampler> m_surfaceSamplers;
     DiscreteDistribution m_weights;
     /* itsDistanceCutoff is not actually used at this level, but it's added
