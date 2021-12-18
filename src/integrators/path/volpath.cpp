@@ -179,7 +179,7 @@ public:
         Spectrum Li = LiPathSteps(ray, rRec, eta, internalThroughput, 
                 mediumInteractionChain, hasEnteredAVolume, initial_n);
 
-        if (m_dumpLuminanceOfSamples) {
+        if (m_dumpLuminanceOfSamples && rRec.depth == 1) {
             cerr.precision(std::numeric_limits<double>::max_digits10);
             cerr << std::scientific;
             cerr << Li.getLuminance() << endl;
