@@ -58,11 +58,14 @@ inline static bool _check_pdf_consistency(const char* location,
         Float pdf1, Float pdf2,
         Float warnThreshold = WARN_INCONSISTENT_PDFS_THRESHOLD) {
     Float absRelErr = fabs((pdf1 - pdf2)/(pdf1 + pdf2));
-    if (WARN_INCONSISTENT_PDFS && absRelErr > warnThreshold)
-        SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e @ %s",
+    if (WARN_INCONSISTENT_PDFS && absRelErr > warnThreshold) {
+        SLog(EWarn, "Warn:   Inconsistent pdfs: %e vs %e, rel %e @ %s",
                 pdf1, pdf2, absRelErr, location);
-    if (REJECT_INCONSISTENT_PDFS && absRelErr > REJECT_INCONSISTENT_PDFS_THRESHOLD)
+    } else if (REJECT_INCONSISTENT_PDFS && absRelErr > REJECT_INCONSISTENT_PDFS_THRESHOLD) {
+        SLog(EWarn, "REJECT: Inconsistent pdfs: %e vs %e, rel %e @ %s",
+                pdf1, pdf2, absRelErr, location);
         return false; /* Should reject */
+    }
     return true;
 }
 inline static bool _check_pdf_consistency(const char* location,
@@ -71,12 +74,16 @@ inline static bool _check_pdf_consistency(const char* location,
     /* Alternatively: fabs(((pdf1-pdf2)/(pdf1+pdf2)).average() */
     Float absRelErr = fabs( (pdf1.average() - pdf2.average())
                            /(pdf1.average() + pdf2.average()));
-    if (WARN_INCONSISTENT_PDFS && absRelErr > warnThreshold)
-        SLog(EWarn, "Inconsistent pdfs: %e vs %e, rel %e @ %s",
+    if (WARN_INCONSISTENT_PDFS && absRelErr > warnThreshold) {
+        SLog(EWarn, "Warn:   Inconsistent pdfs: %e vs %e, rel %e @ %s",
                 pdf1.average(), pdf2.average(),
                 absRelErr, location);
-    if (REJECT_INCONSISTENT_PDFS && absRelErr > REJECT_INCONSISTENT_PDFS_THRESHOLD)
+    } else if (REJECT_INCONSISTENT_PDFS && absRelErr > REJECT_INCONSISTENT_PDFS_THRESHOLD) {
+        SLog(EWarn, "REJECT: Inconsistent pdfs: %e vs %e, rel %e @ %s",
+                pdf1.average(), pdf2.average(),
+                absRelErr, location);
         return false; /* Should reject */
+    }
     return true;
 }
 
@@ -1698,7 +1705,8 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
         const Vector &rec_wi        = indirectSample.rec_wi;
         const Intersection &its_in  = indirectSample.its_in;
 
-        if (dot(rec_wi, n_in) < 0) { /* Internal reflection */
+        if (dot(rec_wi, n_in) < 0) {
+            /* INTERNAL REFLECTION */
             if (!allowInternalReflection)
                 goto DSS_Li_radianceSourceSampling;
 
@@ -1732,6 +1740,8 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
 #if MTS_DSS_CHECK_VARIANCE_SOURCES
             const Vector &d_in          = indirectSample.d_in;
             const EMeasure &bsdfMeasure = indirectSample.bsdfMeasure;
+            const Spectrum &bsdfVal     = indirectSample.bsdfVal;
+            const Spectrum &bssrdfVal   = indirectSample.bssrdfVal;
             if (thisWeight.maxAbsolute()
                     > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
                 cout << "indirect internal reflection"
@@ -1755,7 +1765,7 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
                 result += Li * thisWeight;
             }
         } else {
-            /* Ray exits our medium, possible after an internal reflection chain */
+            /* RAY EXITS OUR MEDIUM, POSSIBLY AFTER AN ENTIRE INTERNAL REFLECTION CHAIN */
             if (numInternalRefl > 0) {
                 avgIntReflChainLen.incrementBase();
                 avgIntReflChainLen += numInternalRefl;
@@ -1802,6 +1812,10 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
 #if MTS_DSS_CHECK_VARIANCE_SOURCES
             if (thisWeight.maxAbsolute()
                     > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
+                const Vector &d_in          = indirectSample.d_in;
+                const EMeasure &bsdfMeasure = indirectSample.bsdfMeasure;
+                const Spectrum &bsdfVal     = indirectSample.bsdfVal;
+                const Spectrum &bssrdfVal   = indirectSample.bssrdfVal;
                 cout << "indirect query" << thisWeight.toString() << endl;
                 checkSourcesOfVariance(scene, channelWeightedThroughput,
                         its_out, d_out, its_in, d_in, rec_wi, extraParams,
@@ -1832,8 +1846,8 @@ DSS_Li_radianceSourceSampling:
     for (const RadianceSource rs : m_sources->get()) {
         // Make fake intersection record
         Intersection its_in;
-        its_in.shFrame.n = rs.n;
-        its_in.geoFrame.n = rs.n;
+        its_in.shFrame = Frame(rs.n);
+        its_in.geoFrame = its_in.shFrame;
         its_in.p = rs.p;
         Spectrum extraParamsPdf = sampleExtraParams(
                 scene, its_out, d_out, its_in, &rs.d, channelWeight,
@@ -2221,7 +2235,9 @@ bool DirectSamplingSubsurface::indirectSample_noSIR(
     s.its_in      = its_in;
     s.d_in        = d_in;
     s.rec_wi      = rec_wi;
-    s.bsdfMeasure = bsdfMeasure;
+    s.bsdfMeasure = bsdfMeasure; // only for MTS_DSS_CHECK_VARIANCE_SOURCES
+    s.bssrdfVal   = bssrdfVal;   // only for MTS_DSS_CHECK_VARIANCE_SOURCES
+    s.bsdfVal     = bsdfVal;     // only for MTS_DSS_CHECK_VARIANCE_SOURCES
     s.weightForDirectContrib   = factor * pdfForDirectContrib.invertButKeepZero();
     s.weightForIndirectContrib = factor * indirectPdf.invertButKeepZero();
     return true;
