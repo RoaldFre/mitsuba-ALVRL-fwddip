@@ -1168,6 +1168,19 @@ protected:
             Sampler *sampler,
             bool absify) const;
 
+    std::pair<Float, Float> computeDirectionsIntegral(
+            const Scene *scene, const Spectrum &throughput,
+            const Intersection its_out,
+            const Vector d_out,
+            const Intersection its_in,
+            const void *extraParams,
+            const EMeasure check_bsdfMeasure,
+            Sampler *sampler,
+            const bool absify,
+            const int numIntSamples,
+            const int continueWithZeroFactor,
+            int *intDirectionSuccess_ptr = NULL,
+            int *intDirectionSampleOnlySuccess_ptr = NULL) const;
 
 
     Float m_eta; /// intIOR/extIOR

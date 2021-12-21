@@ -1517,72 +1517,20 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
     const void *constExtraParams = check_extraParams;
     Spectrum extraParamsPdf(1.0); // we don't integrate over this here
 
-    VarianceFunctor intDirection;
-    int intDirectionSuccess = 0;
-    int intDirectionSampleOnlySuccess = 0;
-    for (int i = 0;
-            i < numIntSamples
-            || (intDirectionSuccess == 0
-                && i < continueWithZeroFactor*numIntSamples);
-            i++) {
-        /* Sample incoming directions d_in&rec_wi based on its_in and
-         * extraParams */
-        Float pdf_d_in_and_rec_wi;
-        Spectrum bsdfVal = sampleDirectionsFromBssrdf(
-                scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
-                pdf_d_in_and_rec_wi, throughput, constExtraParams, sampler);
-        if (bsdfVal.isZero()) {
-            intDirection.update(0);
-            continue;
-        }
-        Assert(bsdfMeasure == check_bsdfMeasure);
-        intDirectionSampleOnlySuccess++;
-
-        /* Evaluate BSSRDF */
-        Spectrum bssrdfVal = bssrdf(scene, p_in, d_in, n_in, p_out,
-                d_out, n_out, constExtraParams);
-        if (bssrdfVal.isZero()) {
-            intDirection.update(0);
-            continue;
-        }
-
-        Float cosTheta = math::abs(dot(d_in, n_in));
-        if (cosTheta == 0) {
-            intDirection.update(0);
-            continue;
-        }
-        Spectrum fullPdf = pdf_d_in_and_rec_wi*extraParamsPdf*surfacePdf;
-        Float contribution = (bssrdfVal*bsdfVal/fullPdf).averageNonNan();
-        if (absify)
-            contribution = math::abs(contribution);
-        if (!std::isfinite(contribution)) {
-            intDirection.update(0);
-            continue;
-        }
-        intDirection.update(contribution);
-        intDirectionSuccess++;
-    }
-
-    Float directionIntegral = intDirection.mean();
-    if (intDirection.errorOfMean()
-            / std::max(theIntegral, math::abs(intDirection.mean()))
-            > 0.3) {
-        cerr << "!big error in intDirection! weight: "
-                << intDirection.mean() << " +- " << intDirection.errorOfMean()
-                << " ["<<intDirection.min()<<".."<<intDirection.max()
-                <<", succ"<<(float)intDirectionSuccess / numIntSamples<<"]"
-                << " relInt: " << intDirection.errorOfMean()/theIntegral
-                << " relErr: " << intDirection.errorOfMean()/math::abs(intDirection.mean())
-                << endl;
-    }
-
+    int intDirectionSuccess;
+    int intDirectionSampleOnlySuccess;
+    auto [directionIntegral, directionIntegralErr] = computeDirectionsIntegral(
+            scene, throughput, its_out, d_out, its_in, check_extraParams,
+            check_bsdfMeasure, sampler, absify,
+            numIntSamples, continueWithZeroFactor,
+            &intDirectionSuccess, &intDirectionSampleOnlySuccess);
 
     Float idealSurfacePdf = extraParamsAndDirIntegral / theIntegral;
     Float idealExtraParamsPdf = directionIntegral / extraParamsAndDirIntegral;
     Float idealDirectionPdf = (check_bssrdfVal * check_bsdfVal).average() / directionIntegral;
 
 
-#if 0
+#if 1
     // EEEEEEEEEEEWWWW hardwired for fwddip :P
     struct ExtraParams {
         Float lengths[SPECTRUM_SAMPLES];
@@ -1599,6 +1547,13 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
         <<" sur: "<<check_surfacePdf / idealSurfacePdf
         <<", ex: " << check_extraParamsPdf.average() / idealExtraParamsPdf
         <<", dir: " << check_pdf_d_in_and_rec_wi / idealDirectionPdf
+
+
+        // XXX DEBUG
+        <<" [" << check_pdf_d_in_and_rec_wi << " vs " << idealDirectionPdf << "]"
+        // XXX DEBUG
+
+        
         /* Relative errors of the ideal pdf estimators themselves.
          * Order:
          *    full integral = surface & extraparams & directions
@@ -1613,22 +1568,37 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
         <<" " << intExtraParamsAndDir.errorOfMean() / extraParamsAndDirIntegral
             <<"("<<(float)intExtraParamsSuccess/numIntSamples
             <<","<<(float)intExtraParamsAndDirSuccess/numIntSamples<<")"
-        <<" " << intDirection.errorOfMean() / directionIntegral
+        <<" " << directionIntegralErr / directionIntegral
             <<"("<<(float)intDirectionSampleOnlySuccess/numIntSamples
             <<","<<(float)intDirectionSuccess/numIntSamples<<")"
         /* The actual integral */
-        <<"   int: " << theIntegral
+        <<"   int:" << theIntegral
         /* Some additional details */
-        <<"  lRl: " << lRl
+        <<"  lRl:" << lRl
 #if 0
         <<"  s/R: " << lengths->lengths[0] / lRl
 #endif
-        <<" dni: " << dot(check_d_in, n_in)
-        <<" dno: " << dot(d_out, n_in)
-        <<" Rni: " << dot(normalize(p_out - p_in), n_in)
-        <<" Rdi: " << dot(normalize(p_out - p_in), check_d_in)
-        <<" Rdo: " << dot(normalize(p_out - p_in), d_out)
-        << endl;
+        <<" dni:" << dot(check_d_in, n_in)
+        <<" dno:" << dot(d_out, n_in)
+        <<" dio:" << dot(d_out, check_d_in);
+        if (lRl == 0) {
+            cerr <<" Rni:" << 0
+                 <<" Rdi:" << 0
+                 <<" Rdo:" << 0;
+        } else {
+            cerr <<" Rni:" << dot(normalize(p_out - p_in), n_in)
+                 <<" Rdi:" << dot(normalize(p_out - p_in), check_d_in)
+                 <<" Rdo:" << dot(normalize(p_out - p_in), d_out);
+        }
+        cerr << endl;
+
+        cerr<< std::scientific << std::setprecision(15);
+        cerr << n_in.toString() << " "
+             << check_d_in.toString() << " "
+             << n_out.toString() << " "
+             << d_out.toString() << " "
+             << (p_out - p_in).toString() << " "
+             << lengths->lengths[0] << endl;
 }
 
 Spectrum DirectSamplingSubsurface::Li(const Scene *scene, Sampler *sampler,
@@ -1638,6 +1608,108 @@ Spectrum DirectSamplingSubsurface::Li(const Scene *scene, Sampler *sampler,
     return Li_internal(
             scene, sampler, its, d, throughput, splits, depth, 0);
 }
+
+
+
+/* Integrates "bssrdf * bsdf" over d_in and rec_wi by sampling 
+ * sampleDirectionsFromBssrdf (i.e.  MC integral over pdf_d_in_and_rec_wi)
+ *
+ * Returns (integral, errorOfResult)
+ *
+ * TODO: make such separate routines for each component in 
+ * checkSourcesOfVariance() */
+std::pair<Float, Float> DirectSamplingSubsurface::computeDirectionsIntegral(
+        const Scene *scene, const Spectrum &throughput,
+        const Intersection its_out,
+        const Vector d_out,
+        const Intersection its_in_orig,
+        const void *extraParams,
+        const EMeasure check_bsdfMeasure,
+        Sampler *sampler,
+        const bool absify,
+        const int numIntSamples,
+        const int continueWithZeroFactor,
+        int *intDirectionSuccess_ptr,
+        int *intDirectionSampleOnlySuccess_ptr) const {
+
+    Intersection its_in(its_in_orig); // wi gets set so need to have non-const version
+    const Point  p_in = its_in.p;
+    const Vector n_in = its_in.shFrame.n;
+    const Point  p_out = its_out.p;
+    const Normal n_out = its_out.shFrame.n;
+
+    VarianceFunctor intDirection;
+    int intDirectionSuccess = 0;
+    int intDirectionSampleOnlySuccess = 0;
+    int numSamplesTaken = 0;
+    for (int i = 0;
+            i < numIntSamples
+            || (intDirectionSuccess == 0
+                && i < continueWithZeroFactor*numIntSamples);
+            i++) {
+        numSamplesTaken++;
+        /* Sample incoming directions d_in&rec_wi based on its_in and
+         * extraParams */
+        Vector d_in, rec_wi;
+        Float pdf_d_in_and_rec_wi;
+        EMeasure bsdfMeasure;
+        Spectrum bsdfVal = sampleDirectionsFromBssrdf(
+                scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
+                pdf_d_in_and_rec_wi, throughput, extraParams, sampler);
+        if (bsdfVal.isZero()) {
+            intDirection.update(0);
+            continue;
+        }
+        Assert(bsdfMeasure == check_bsdfMeasure);
+        intDirectionSampleOnlySuccess++;
+
+        /* Evaluate BSSRDF */
+        Spectrum bssrdfVal = bssrdf(scene, p_in, d_in, n_in, p_out,
+                d_out, n_out, extraParams);
+        if (bssrdfVal.isZero()) {
+            intDirection.update(0);
+            continue;
+        }
+
+        Float cosTheta = math::abs(dot(d_in, n_in));
+        if (cosTheta == 0) {
+            intDirection.update(0);
+            continue;
+        }
+        Float contribution = (bssrdfVal*bsdfVal/pdf_d_in_and_rec_wi).averageNonNan();
+        if (absify)
+            contribution = math::abs(contribution);
+        if (!std::isfinite(contribution)) {
+            intDirection.update(0);
+            continue;
+        }
+        intDirection.update(contribution);
+        intDirectionSuccess++;
+    }
+
+    Float directionIntegral = intDirection.mean();
+    Float directionIntegralErr = intDirection.errorOfMean();
+    if (directionIntegralErr / math::abs(directionIntegral) > 0.3) {
+        cerr << "!big error in intDirection! weight: "
+                << intDirection.mean() << " +- " << directionIntegralErr
+                << " ["<<intDirection.min()<<".."<<intDirection.max()
+                <<", succ"<<(float)intDirectionSuccess / numSamplesTaken<<"]"
+                << " relErr: " << directionIntegralErr / directionIntegral
+                << endl;
+    }
+
+    if (intDirectionSuccess_ptr)
+        *intDirectionSuccess_ptr = intDirectionSuccess;
+    if (intDirectionSampleOnlySuccess_ptr)
+        *intDirectionSampleOnlySuccess_ptr = intDirectionSampleOnlySuccess;
+
+    return {directionIntegral, directionIntegralErr};
+}
+
+
+
+
+
 
 /* Query Li(its_out,d) at intersection its_out. Sample new query point on
  * the surface of our shape with associated intersection its_in from which
