@@ -509,6 +509,7 @@ public:
         Assert(-dot(d_in, its_in.shFrame.n) >= 0);
 #endif
         Float pdf = 0;
+
         pdf += m_dirHemiWeight
                 * DirectSamplingSubsurface::pdfBssrdfDirection(
                     scene, its_out, d_out, its_in, d_in, extraParams, throughput);
@@ -1087,6 +1088,8 @@ FINLINE Float DipoleModel::sampleDirectionDipole(
     Assert(real.extraParams == virt.extraParams);
     if (realWeight == 1 || sampler->next1D() < realWeight) {
         realPdf = sampleDirectionMonopole(real, sampler);
+        if (realPdf == 0)
+            return 0;
         if (!(dot(real.d_in, real.n_in) <= 0)) { // protect against roundoff
             Assert(dot(real.d_in, real.n_in) <= Epsilon);
             return 0;
@@ -1099,6 +1102,8 @@ FINLINE Float DipoleModel::sampleDirectionDipole(
         virtPdf = pdfDirectionMonopole(virt);
     } else {
         virtPdf = sampleDirectionMonopole(virt, sampler);
+        if (virtPdf == 0)
+            return 0;
         Assert(dot(virt.d_in, virt.n_in) <= Epsilon);
         if (!virtToReal(R, n_in, dipConf, virt, real))
             return 0;

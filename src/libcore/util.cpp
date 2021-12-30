@@ -589,6 +589,20 @@ Vector sphericalDirection(Float theta, Float phi) {
     );
 }
 
+Vector cylindricalDirection(Float z, Float phi) {
+    Float sinTheta, cosTheta, sinPhi, cosPhi;
+
+    cosTheta = z;
+    sinTheta = math::safe_sqrt(1 - z*z);
+    math::sincos(phi, &sinPhi, &cosPhi);
+
+    return Vector(
+        sinTheta * cosPhi,
+        sinTheta * sinPhi,
+        cosTheta
+    );
+}
+
 void coordinateSystem(const Vector &a, Vector &b, Vector &c) {
     if (std::abs(a.x) > std::abs(a.y)) {
         Float invLen = 1.0f / std::sqrt(a.x * a.x + a.z * a.z);

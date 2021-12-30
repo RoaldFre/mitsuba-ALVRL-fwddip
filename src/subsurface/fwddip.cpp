@@ -30,6 +30,8 @@
 /* For the soft inverse sample ray cosine sampling */
 #define MARG_INVSAMPLER_EPSILON 1e-5f
 
+#define MTS_FWDDIP_DEBUG_USE_SIMPLE_JENSEN_SURFACE_SAMPLER false
+
 MTS_NAMESPACE_BEGIN
 
 
@@ -956,7 +958,7 @@ void FwdDip::configure() {
     /* Effective transport extinction coefficient */
     Spectrum sigmaTr = (3 * m_sigmaA * sigmaTPrime).sqrt();
 
-    Float mu = 1 - m_g.average();
+    //Float mu = 1 - m_g.average();
 
     Spectrum p_spectrum = (0.5*sigmaSPrime);
 
@@ -1011,6 +1013,19 @@ void FwdDip::configure() {
         ref<TangentSampler2D> exactJensenDipoleSampler = new RadialSampler2D(
                 new RadialExactDipoleSampler2D(m_sigmaA, m_sigmaS, m_g, m_eta));
 
+#if MTS_FWDDIP_DEBUG_USE_SIMPLE_JENSEN_SURFACE_SAMPLER
+        /* Double the weight because this is the most 'natural' sampler 
+         * for truly near-planar boundaries */
+        registerSampler(2.0, new ProjSurfaceSampler(
+                DSSProjFrame::EDirectionOut,
+                exactJensenDipoleSampler, itsSampler.get()));
+        registerSampler(1.0, new ProjSurfaceSampler(
+                DSSProjFrame::EDirectionDirection,
+                exactJensenDipoleSampler, itsSampler.get()));
+        registerSampler(1.0, new ProjSurfaceSampler(
+                DSSProjFrame::EDirectionSide,
+                exactJensenDipoleSampler, itsSampler.get()));
+#else
         std::vector<std::pair<Float, const TangentSampler2D*> > perp;
         perp.push_back(std::make_pair(smallLengthWeight,
                 new FwdDipSmallLengthSamplerPerpToDir(m_sigmaS, m_g, 1)));
@@ -1030,28 +1045,29 @@ void FwdDip::configure() {
 
 
 
-#if 1
+# if 1
         registerSampler(1.0, new ProjSurfaceSampler(
                 DSSProjFrame::EDirectionDirection,
                 smallLengthSampler_perp, itsSampler.get()));
-#endif
-#if 1
+# endif
+# if 1
         /* Double the weight because this is the most 'natural' sampler 
          * for truly near-planar boundaries */
         registerSampler(2.0, new ProjSurfaceSampler(
                 DSSProjFrame::EDirectionOut,
                 smallLengthSampler_along, itsSampler.get()));
-#endif
-#if 1
+# endif
+# if 1
         registerSampler(1.0, new ProjSurfaceSampler(
                 DSSProjFrame::EDirectionSide,
                 smallLengthSampler_along, itsSampler.get()));
-#endif
+# endif
 
-#if 1
+# if 1
         registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, 0, itsSampler));
         //registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, ShadowEpsilon, itsSampler));
-#endif
+# endif
+#endif /* MTS_FWDDIP_DEBUG_USE_SIMPLE_JENSEN_SURFACE_SAMPLER*/
     }
 
     normalizeSamplers();

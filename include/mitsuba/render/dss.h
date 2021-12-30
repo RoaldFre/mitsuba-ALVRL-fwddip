@@ -903,6 +903,22 @@ public:
         return true;
     }
 
+
+    std::pair<Float, Float> computeDirectionsIntegral(
+            const Scene *scene, const Spectrum &throughput,
+            const Intersection its_out,
+            const Vector d_out,
+            const Intersection its_in,
+            const void *extraParams,
+            const EMeasure check_bsdfMeasure,
+            Sampler *sampler,
+            const bool absify,
+            const int numIntSamples,
+            const int continueWithZeroFactor,
+            int *intDirectionSuccess_ptr = NULL,
+            int *intDirectionSampleOnlySuccess_ptr = NULL) const;
+
+
     virtual void bindUsedResources(ParallelProcess *proc) const;
     virtual void wakeup(ConfigurableObject *parent,
             std::map<std::string, SerializableObject *> &params);
@@ -982,7 +998,8 @@ protected:
      * Sample the \c d_in and \c rec_wi directions based on the BSSRDF.
      *
      * This is used for MIS weighting in combination with \c
-     * sampleDirectionsDirect().
+     * sampleDirectionsDirect(). Returns the BSDF value, including *BOTH* 
+     * cosine factors!
      *
      * \param pdf_d_in_and_rec_wi Pdf on internal direction d_in and final
      * recursive wi query direction (after having interacted with the
@@ -992,11 +1009,10 @@ protected:
      *
      * \param rec_wi Direction for recursive wi query, in world coordinates.
      *
-     * \return The value of the BSDF, including both cosine factors (or
+     * \return The value of the BSDF, *including both cosine factors* (or
      * only the one relevant factor if the accompagnying BSDF is not
-     * smooth).
+     * smooth)!
      */
-
     Spectrum sampleDirectionsFromBssrdf(
             const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
@@ -1099,9 +1115,9 @@ protected:
         Intersection its_in;
         Vector d_in; // pointing inwards, on our side of medium
         Vector rec_wi;
-        EMeasure bsdfMeasure; // NOTE: only here for checkSourcesOfVariance...
-        Spectrum bsdfVal;     // NOTE: only here for checkSourcesOfVariance...
-        Spectrum bssrdfVal;   // NOTE: only here for checkSourcesOfVariance...
+        EMeasure bsdfMeasure;        // NOTE: only here for checkSourcesOfVariance...
+        Spectrum bsdfValWithCosines; // NOTE: only here for checkSourcesOfVariance...
+        Spectrum bssrdfVal;          // NOTE: only here for checkSourcesOfVariance...
 
         /* Sample weight for direct portion of the 'indirectly sampled' Li
          * (handles optional MIS, e.g. for 2-sample MIS weighting with
@@ -1168,20 +1184,6 @@ protected:
             Sampler *sampler,
             bool absify) const;
 
-    std::pair<Float, Float> computeDirectionsIntegral(
-            const Scene *scene, const Spectrum &throughput,
-            const Intersection its_out,
-            const Vector d_out,
-            const Intersection its_in,
-            const void *extraParams,
-            const EMeasure check_bsdfMeasure,
-            Sampler *sampler,
-            const bool absify,
-            const int numIntSamples,
-            const int continueWithZeroFactor,
-            int *intDirectionSuccess_ptr = NULL,
-            int *intDirectionSampleOnlySuccess_ptr = NULL) const;
-
 
     Float m_eta; /// intIOR/extIOR
     size_t m_numSIRsurface; /// See also m_SIRnonSurfaceOversamplingFactor!
@@ -1202,6 +1204,7 @@ protected:
     bool m_allowIncomingOutgoingDirections;
     bool m_nonCollimatedLightSourcesPresent;
     int m_maxInternalReflections; /// Maximum number of subsequent internal reflections (<0 for unbounded)
+    int m_minInternalReflections; /// Minimum number of subsequent internal reflections (<0 for unbounded), mostly useful for debugging
     bool m_noRecursiveSubsurf; /// For debug: don't include subsurf Li in recursive query
     ref_vector<const SurfaceSampler> m_surfaceSamplers;
     DiscreteDistribution m_weights;

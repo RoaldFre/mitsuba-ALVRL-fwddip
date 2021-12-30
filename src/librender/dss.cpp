@@ -16,6 +16,7 @@
     along with this program. If not, see <http://www.gnu.org/licenses/>.
 */
 
+#include <cmath>
 #include <mitsuba/render/scene.h>
 #include <mitsuba/render/dss.h>
 #include <mitsuba/core/lock.h>
@@ -40,6 +41,8 @@ MTS_NAMESPACE_BEGIN
  * Set to false when using adaptive integrator, as that is currently broken
  * otherwise... (TODO) */
 #define MTS_DSS_USE_RADIANCE_SOURCES true
+
+#define MTS_DSS_UNIFORM_DIRECTION_INSTEAD_OF_COSINE false
 
 #define WARN_INCONSISTENT_PDFS false /* Warn about inconsistent pdfs? */
 #define WARN_INCONSISTENT_PDFS_THRESHOLD 1e-2 /* Relative error threshold to warn */
@@ -185,6 +188,10 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     m_allowIncomingOutgoingDirections = props.getBoolean(
             "allowIncomingOutgoingDirections", false);
 
+    /* Minimum number of subsequent internal reflections. */
+    m_minInternalReflections = props.getInteger(
+            "minInternalReflections", 0);
+
     /* Maximum number of subsequent internal reflections. Negative value 
      * for unbounded. */
     m_maxInternalReflections = props.getInteger(
@@ -213,10 +220,10 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
 
     Log(EInfo, "DirectSamplingSubsurface settings: directSampling %d, "
             "MIS %d, singleChannel %d, allowIncomingOutgoingDirections %d, "
-            "maxIntRefl %d",
+            "minIntRefl %d, maxIntRefl %d",
             m_directSampling, m_directSamplingMIS,
             m_singleChannel, m_allowIncomingOutgoingDirections,
-            m_maxInternalReflections);
+            m_minInternalReflections, m_maxInternalReflections);
     {
         LockGuard lock(sourcesMutex);
         m_sourcesIndex = sourcesIndex++;
@@ -247,6 +254,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(Stream *stream,
     m_sourcesIndex = stream->readInt();
     m_sourcesResID = -1;
     m_itsDistanceCutoff = stream->readFloat();
+    m_minInternalReflections = stream->readInt();
     m_maxInternalReflections = stream->readInt();
     m_noRecursiveSubsurf = stream->readBool();
     /* Note: serialize gets called before preprocess, so we can't pass
@@ -266,6 +274,7 @@ void DirectSamplingSubsurface::serialize(Stream *stream,
     stream->writeFloat(m_eta);
     stream->writeInt(m_sourcesIndex);
     stream->writeFloat(m_itsDistanceCutoff);
+    stream->writeInt(m_minInternalReflections);
     stream->writeInt(m_maxInternalReflections);
     stream->writeBool(m_noRecursiveSubsurf);
     /* Note: serialize gets called before preprocess, so we can't pass
@@ -360,13 +369,13 @@ bool DirectSamplingSubsurface::preprocess(
          * medium */
         BSDFSamplingRecord bRec(its, NULL, EImportance);
         bRec.typeMask = BSDF::ETransmission; // We need to get inside
-        Spectrum bsdfVal = bsdf->sample(bRec, Point2(0.5f));
+        Spectrum bsdfWeightWithCosine = bsdf->sample(bRec, Point2(0.5f));
 
-        Assert(!(bsdfVal.isZero()));
+        Assert(!(bsdfWeightWithCosine.isZero()));
         Assert(Frame::cosTheta(bRec.wo) < 0); // inwards pointing direction
 
         m_sources->push_back(RadianceSource(
-                its.p, its.shFrame.n, its.toWorld(bRec.wo), Li * bsdfVal));
+                its.p, its.shFrame.n, its.toWorld(bRec.wo), Li * bsdfWeightWithCosine));
     }
     Log(EInfo, "DirectSamplingSubsurface medium stored %d collimated light "
             "sources", m_sources->get().size());
@@ -960,8 +969,13 @@ Float DirectSamplingSubsurface::sampleBssrdfDirection(const Scene *scene,
         Sampler *sampler) const {
     /* Sample an incoming direction (on our side of the medium) on the
      * cosine-weighted hemisphere */
+#if MTS_DSS_UNIFORM_DIRECTION_INSTEAD_OF_COSINE
+    Vector hemiSamp = warp::squareToUniformHemisphere(sampler->next2D());
+    Float pdf = INV_TWOPI;
+#else
     Vector hemiSamp = warp::squareToCosineHemisphere(sampler->next2D());
     Float pdf = warp::squareToCosineHemispherePdf(hemiSamp);
+#endif
     hemiSamp.z = -hemiSamp.z; // pointing inwards
     its_in.wi = hemiSamp;
     d_in = its_in.toWorld(hemiSamp); // pointing inwards
@@ -986,16 +1000,28 @@ Float DirectSamplingSubsurface::pdfBssrdfDirection(const Scene *scene,
     Vector n_in = its_in.shFrame.n;
     Assert(math::abs(d_in.length() - 1) < Epsilon);
     Assert(math::abs(n_in.length() - 1) < Epsilon);
-#if MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
-    return Spectrum(INV_PI * math::abs(dot(d_in, n_in)));
+#if MTS_DSS_UNIFORM_DIRECTION_INSTEAD_OF_COSINE
+# if MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
+    if (-dot(d_in, n_in) >= 0)
+        return INV_TWOPI;
+    return 0;
+# else
+    Assert(-dot(d_in, n_in) >= 0);
+    return INV_TWOPI;
+# endif
 #else
+# if MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
+    return Spectrum(INV_PI * math::abs(dot(d_in, n_in)));
+# else
     Assert(-dot(d_in, n_in) >= 0);
     return INV_PI * (-dot(d_in, n_in));
+# endif
 #endif
 }
 
 
 
+/* Returns BSDF including BOTH COSINE FACTORS! */
 Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
         const Scene *scene,
         const Intersection &its_out, const Vector &d_out,
@@ -1022,16 +1048,18 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
     const BSDF *bsdf = its_in.getBSDF();
     BSDFSamplingRecord bRec(its_in, sampler, ERadiance);
     Float rec_wi_pdf;
-    Spectrum bsdfVal = bsdf->sample(bRec, rec_wi_pdf, sampler->next2D());
-    if (bsdfVal.isZero())
+    Spectrum bsdfWeightWithCosine = bsdf->sample(bRec, rec_wi_pdf, sampler->next2D());
+    if (bsdfWeightWithCosine.isZero())
         return Spectrum(0.0f);
-    bsdfVal *= rec_wi_pdf; // Transform back to actual bsdf value
-    /* The bsdf already takes care of one cosine factor, get the other
-     * cosine in as well */
+    Spectrum bsdfValWithCosine = bsdfWeightWithCosine * rec_wi_pdf; // Transform back to actual bsdf value
+
+    /* The bsdf already takes care of one cosine factor [if the bsdf is 
+     * smooth, and none if there is a delta bsdf as it should be], get the 
+     * other cosine in as well */
 #if MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
-    bsdfVal *= math::abs(dot(d_in, its_in.shFrame.n));
+    Spectrum bsdfValWithCosines = bsdfValWithCosine * math::abs(dot(d_in, its_in.shFrame.n));
 #else
-    bsdfVal *= -dot(d_in, its_in.shFrame.n);
+    Spectrum bsdfValWithCosines = bsdfValWithCosine * (-dot(d_in, its_in.shFrame.n));
 #endif
     /* We need to store the measure to get the correct pdfs down the road
      * (e.g. discrete versus solid angle) */
@@ -1045,7 +1073,7 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
             d_in, rec_wi, bsdfMeasure, throughput, extraParams)))
         return Spectrum(0.0f);
 
-    return bsdfVal;
+    return bsdfValWithCosines; /* INCLUDES BOTH COSINE FACTORS! */
 }
 
 Float DirectSamplingSubsurface::pdfDirectionsFromBssrdf(
@@ -1073,6 +1101,7 @@ Float DirectSamplingSubsurface::pdfDirectionsFromBssrdf(
     return d_in_pdf * rec_wi_pdf;
 }
 
+/* Returns BSDF including BOTH COSINE FACTORS! */
 Spectrum DirectSamplingSubsurface::sampleDirectionsDirect(
         const Scene *scene,
         const Intersection &its_out, const Vector &d_out,
@@ -1114,16 +1143,16 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsDirect(
     const BSDF *bsdf = its_in.getBSDF();
     Float d_in_pdf;
 
-    Spectrum bsdfVal = bsdf->sample(bRec, d_in_pdf, sampler->next2D());
-    if (bsdfVal.isZero())
+    Spectrum bsdfWeightWithCosine = bsdf->sample(bRec, d_in_pdf, sampler->next2D());
+    if (bsdfWeightWithCosine.isZero())
         return Spectrum(0.0);
     Assert(Frame::cosTheta(bRec.wo) < 0); // inwards pointing direction
-    bsdfVal *= d_in_pdf; // Transform back to actual bsdf value
+    Spectrum bsdfValWithCosine = bsdfWeightWithCosine * d_in_pdf; // Transform back to actual bsdf value
 
     /* The included cosine factor in the bsdfVal is on our 'd_in', get the
      * other cosine factor in as well */
     Assert(dot(rec_wi, n_in) >= 0);
-    bsdfVal *= dot(rec_wi, n_in);
+    Spectrum bsdfValWithCosines = bsdfValWithCosine * dot(rec_wi, n_in);
 
     bsdfMeasure = bsdf->getMeasure(bRec.sampledType);
     its_in.wi = bRec.wo; // Make it as if we sampled in the radiance direction
@@ -1135,7 +1164,7 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsDirect(
             d_in, rec_wi, bsdfMeasure)))
         return Spectrum(0.0f);
 
-    return bsdfVal;
+    return bsdfValWithCosines;
 }
 
 Spectrum DirectSamplingSubsurface::pdfDirectionsDirect(
@@ -1194,14 +1223,14 @@ Spectrum DirectSamplingSubsurface::sampleDirect(
         const Spectrum &effectiveThroughput,
         Vector &d_in, Vector &rec_wi, void *extraParams,
         EMeasure &bsdfMeasure, EMeasure &lightSamplingMeasure,
-        Spectrum &bsdfVal, Spectrum &LiDirect) const {
+        Spectrum &bsdfValWithCosines, Spectrum &LiDirect) const {
     Spectrum pdf_d_in_and_rec_wi;
 
     /* Sample incoming directions d_in&rec_wi based on its_in */
-    bsdfVal = sampleDirectionsDirect(
+    bsdfValWithCosines = sampleDirectionsDirect(
             scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
             lightSamplingMeasure, pdf_d_in_and_rec_wi, LiDirect, sampler);
-    if (bsdfVal.isZero())
+    if (bsdfValWithCosines.isZero())
         return Spectrum(0.0f);
 
     /* Sample extraParams based on its_in and d_in&rec_wi */
@@ -1253,7 +1282,7 @@ Spectrum DirectSamplingSubsurface::sampleIndirect(
         const Vector &d_out,
         const Spectrum &effectiveThroughput,
         Vector &d_in, Vector &rec_wi, void *extraParams,
-        EMeasure &bsdfMeasure, Spectrum &bsdfVal) const {
+        EMeasure &bsdfMeasure, Spectrum &bsdfValWithCosines) const {
 
     /* Sample extraParams based on its_in */
     Spectrum extraParamsPdf = sampleExtraParams(
@@ -1266,12 +1295,12 @@ Spectrum DirectSamplingSubsurface::sampleIndirect(
 
     /* Sample incoming directions d_in&rec_wi based on its_in and
      * extraParams */
-    bsdfVal = sampleDirectionsFromBssrdf(
+    bsdfValWithCosines = sampleDirectionsFromBssrdf(
             scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
             pdf_d_in_and_rec_wi,
             effectiveThroughput * extraParamsPdf.zeroMask(),
             extraParams, sampler);
-    if (bsdfVal.isZero())
+    if (bsdfValWithCosines.isZero())
         return Spectrum(0.0f);
 
     Vector n_in = its_in.shFrame.n;
@@ -1326,7 +1355,7 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
         const Vector check_rec_wi,
         const void *check_extraParams,
         const Spectrum check_bssrdfVal,
-        const Spectrum check_bsdfVal,
+        const Spectrum check_bsdfValWithCosines,
         const EMeasure check_bsdfMeasure,
         Sampler *sampler,
         const bool absify) const {
@@ -1339,7 +1368,7 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
     char extraParamsBuffer[extraParamsSize()];
     void *extraParams = extraParamsBuffer;
 
-    const int numIntSamples = 100000; // 2000;
+    const int numIntSamples = 300000; // 2000;
     const int continueWithZeroFactor = 10;
 
     // Compute the original PDFS
@@ -1396,10 +1425,10 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
         /* Sample incoming directions d_in&rec_wi based on its_in and
          * extraParams */
         Float pdf_d_in_and_rec_wi;
-        Spectrum bsdfVal = sampleDirectionsFromBssrdf(
+        Spectrum bsdfValWithCosines = sampleDirectionsFromBssrdf(
                 scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
                 pdf_d_in_and_rec_wi, throughput, extraParams, sampler);
-        if (bsdfVal.isZero()) {
+        if (bsdfValWithCosines.isZero()) {
             integral.update(0);
             continue;
         }
@@ -1419,7 +1448,7 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
             continue;
         }
         Spectrum fullPdf = pdf_d_in_and_rec_wi*extraParamsPdf*surfacePdf;
-        Float contribution = (bssrdfVal*bsdfVal/fullPdf).averageNonNan();
+        Float contribution = (bssrdfVal*bsdfValWithCosines/fullPdf).averageNonNan();
         if (absify)
             contribution = math::abs(contribution);
         if (!std::isfinite(contribution)) {
@@ -1464,10 +1493,10 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
         /* Sample incoming directions d_in&rec_wi based on its_in and
          * extraParams */
         Float pdf_d_in_and_rec_wi;
-        Spectrum bsdfVal = sampleDirectionsFromBssrdf(
+        Spectrum bsdfValWithCosines = sampleDirectionsFromBssrdf(
                 scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
                 pdf_d_in_and_rec_wi, throughput, extraParams, sampler);
-        if (bsdfVal.isZero()) {
+        if (bsdfValWithCosines.isZero()) {
             intExtraParamsAndDir.update(0);
             continue;
         }
@@ -1487,7 +1516,7 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
             continue;
         }
         Spectrum fullPdf = pdf_d_in_and_rec_wi*extraParamsPdf*surfacePdf;
-        Float contribution = (bssrdfVal*bsdfVal/fullPdf).averageNonNan();
+        Float contribution = (bssrdfVal*bsdfValWithCosines/fullPdf).averageNonNan();
         if (absify)
             contribution = math::abs(contribution);
         if (!std::isfinite(contribution)) {
@@ -1514,20 +1543,20 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
 
     // INTEGRATE DIRECTION
 
-    const void *constExtraParams = check_extraParams;
-    Spectrum extraParamsPdf(1.0); // we don't integrate over this here
-
     int intDirectionSuccess;
     int intDirectionSampleOnlySuccess;
-    auto [directionIntegral, directionIntegralErr] = computeDirectionsIntegral(
+    //auto [directionIntegral, directionIntegralErr] = computeDirectionsIntegral(
+    auto thePair = computeDirectionsIntegral(
             scene, throughput, its_out, d_out, its_in, check_extraParams,
             check_bsdfMeasure, sampler, absify,
             numIntSamples, continueWithZeroFactor,
             &intDirectionSuccess, &intDirectionSampleOnlySuccess);
+    Float directionIntegral    = thePair.first;
+    Float directionIntegralErr = thePair.second;
 
     Float idealSurfacePdf = extraParamsAndDirIntegral / theIntegral;
     Float idealExtraParamsPdf = directionIntegral / extraParamsAndDirIntegral;
-    Float idealDirectionPdf = (check_bssrdfVal * check_bsdfVal).average() / directionIntegral;
+    Float idealDirectionPdf = (check_bssrdfVal * check_bsdfValWithCosines).average() / directionIntegral;
 
 
 #if 1
@@ -1611,8 +1640,9 @@ Spectrum DirectSamplingSubsurface::Li(const Scene *scene, Sampler *sampler,
 
 
 
-/* Integrates "bssrdf * bsdf" over d_in and rec_wi by sampling 
- * sampleDirectionsFromBssrdf (i.e.  MC integral over pdf_d_in_and_rec_wi)
+/* Integrates "bssrdf * bsdf * 'cos(bsrdf|recw_wi)' * 'cos(bssrdf|d_in)'" 
+ * over d_in and rec_wi by sampling sampleDirectionsFromBssrdf (i.e.  MC 
+ * integral over pdf_d_in_and_rec_wi)
  *
  * Returns (integral, errorOfResult)
  *
@@ -1653,10 +1683,10 @@ std::pair<Float, Float> DirectSamplingSubsurface::computeDirectionsIntegral(
         Vector d_in, rec_wi;
         Float pdf_d_in_and_rec_wi;
         EMeasure bsdfMeasure;
-        Spectrum bsdfVal = sampleDirectionsFromBssrdf(
+        Spectrum bsdfValWithCosines = sampleDirectionsFromBssrdf(
                 scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
                 pdf_d_in_and_rec_wi, throughput, extraParams, sampler);
-        if (bsdfVal.isZero()) {
+        if (bsdfValWithCosines.isZero()) {
             intDirection.update(0);
             continue;
         }
@@ -1676,7 +1706,7 @@ std::pair<Float, Float> DirectSamplingSubsurface::computeDirectionsIntegral(
             intDirection.update(0);
             continue;
         }
-        Float contribution = (bssrdfVal*bsdfVal/pdf_d_in_and_rec_wi).averageNonNan();
+        Float contribution = (bssrdfVal*bsdfValWithCosines/pdf_d_in_and_rec_wi).averageNonNan();
         if (absify)
             contribution = math::abs(contribution);
         if (!std::isfinite(contribution)) {
@@ -1723,6 +1753,8 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
         const Intersection &its_out, const Vector &d,
         const Spectrum &throughput, int &splits, int depth, int numInternalRefl) const {
 
+    Assert(m_maxInternalReflections < 0 || numInternalRefl <= m_maxInternalReflections);
+
     const Vector d_out = -d;
     const Normal n_out = its_out.shFrame.n;
 
@@ -1765,7 +1797,10 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
                 channelWeight, channelWeightedThroughput, LiDirect,
                 indirectSample, extraParams);
     }
-    Spectrum result = LiDirect;
+    Spectrum result(0.0f);
+    if (numInternalRefl >= m_minInternalReflections)
+        result += LiDirect;
+
     if (!haveIndirect)
         goto DSS_Li_radianceSourceSampling;
 
@@ -1778,15 +1813,19 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
         const Intersection &its_in  = indirectSample.its_in;
 
         if (dot(rec_wi, n_in) < 0) {
-            /* INTERNAL REFLECTION */
+            /* INTERNAL REFLECTION for the indirectly sampled ray */
             if (!allowInternalReflection)
                 goto DSS_Li_radianceSourceSampling;
 
-            numInternalRefl++;
-
             if (m_maxInternalReflections >= 0
-                    && numInternalRefl > m_maxInternalReflections)
-                goto DSS_Li_radianceSourceSampling;
+                    && numInternalRefl >= m_maxInternalReflections) {
+                /* We should be the first one in the chain that crossed the 
+                 * threshold */
+                Assert(numInternalRefl == m_maxInternalReflections);
+                return result;
+            }
+
+            numInternalRefl++;
 
             /* If we have internal reflection: don't go to the integrator
              * again, but just handle this through local recursion right
@@ -1809,21 +1848,24 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
             }
             avgNumSplits += numSplitsHere;
 
+
+
+
 #if MTS_DSS_CHECK_VARIANCE_SOURCES
-            const Vector &d_in          = indirectSample.d_in;
-            const EMeasure &bsdfMeasure = indirectSample.bsdfMeasure;
-            const Spectrum &bsdfVal     = indirectSample.bsdfVal;
-            const Spectrum &bssrdfVal   = indirectSample.bssrdfVal;
+            const Vector &d_in                 = indirectSample.d_in;
+            const EMeasure &bsdfMeasure        = indirectSample.bsdfMeasure;
+            const Spectrum &bsdfValWithCosines = indirectSample.bsdfValWithCosines;
+            const Spectrum &bssrdfVal          = indirectSample.bssrdfVal;
             if (thisWeight.maxAbsolute()
                     > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
                 cout << "indirect internal reflection"
                         << thisWeight.toString() << endl;
                 checkSourcesOfVariance(scene, channelWeightedThroughput,
                         its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                        bssrdfVal, bsdfVal, bsdfMeasure, sampler, true);
+                        bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
                 checkSourcesOfVariance(scene, channelWeightedThroughput,
                         its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                        bssrdfVal, bsdfVal, bsdfMeasure, sampler, false);
+                        bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, false);
             }
 #endif
 
@@ -1838,10 +1880,17 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
             }
         } else {
             /* RAY EXITS OUR MEDIUM, POSSIBLY AFTER AN ENTIRE INTERNAL REFLECTION CHAIN */
-            if (numInternalRefl > 0) {
-                avgIntReflChainLen.incrementBase();
-                avgIntReflChainLen += numInternalRefl;
-            }
+            Assert(m_maxInternalReflections < 0
+                    || numInternalRefl <= m_maxInternalReflections);
+
+            /* TODO: we can be more efficient by avoiding to sample the 
+             * transmission lobe of the bsdf if we haven't reached the 
+             * correct internal reflection chain length yet... */
+            if (numInternalRefl < m_minInternalReflections)
+                return result; // Not even a goto DSS_Li_radianceSourceSampling because wrong chain length!
+
+            avgIntReflChainLen.incrementBase();
+            avgIntReflChainLen += numInternalRefl;
 
             /* Ray exits our medium, query the integrator for Li */
             RadianceQueryRecord rRecBase(scene, sampler);
@@ -1884,23 +1933,23 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
 #if MTS_DSS_CHECK_VARIANCE_SOURCES
             if (thisWeight.maxAbsolute()
                     > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
-                const Vector &d_in          = indirectSample.d_in;
-                const EMeasure &bsdfMeasure = indirectSample.bsdfMeasure;
-                const Spectrum &bsdfVal     = indirectSample.bsdfVal;
-                const Spectrum &bssrdfVal   = indirectSample.bssrdfVal;
+                const Vector &d_in                 = indirectSample.d_in;
+                const EMeasure &bsdfMeasure        = indirectSample.bsdfMeasure;
+                const Spectrum &bsdfValWithCosines = indirectSample.bsdfValWithCosines;
+                const Spectrum &bssrdfVal          = indirectSample.bssrdfVal;
                 cout << "indirect query" << thisWeight.toString() << endl;
                 checkSourcesOfVariance(scene, channelWeightedThroughput,
                         its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                        bssrdfVal, bsdfVal, bsdfMeasure, sampler, true);
+                        bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
                 checkSourcesOfVariance(scene, channelWeightedThroughput,
                         its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                        bssrdfVal, bsdfVal, bsdfMeasure, sampler, false);
+                        bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, false);
             }
 #endif
 
             // Get the actual indirect contribution from the integrator
             if (m_noRecursiveSubsurf) {
-                // DEBUG TEST (to see if this fixes the fireflies with nontriv (eta!=1) boundary bsdf!!)
+                // XXX DEBUG TEST (to see if this fixes the fireflies with nontriv (eta!=1) boundary bsdf!!)
                 integratorQuery &= ~RadianceQueryRecord::ESubsurfaceRadiance;
             }
             rRec.recursiveQuery(rRecBase, integratorQuery, thisWeight);
@@ -1912,6 +1961,13 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
 
 DSS_Li_radianceSourceSampling:
 #if MTS_DSS_USE_RADIANCE_SOURCES /* do radiance source sampling? */
+
+    Assert(m_maxInternalReflections < 0
+            || numInternalRefl <= m_maxInternalReflections);
+
+    if (numInternalRefl < m_minInternalReflections)
+        return result;
+
     const Point p_out = its_out.p;
     /* Add light sources that cannot be sampled */
     Assert(m_sources.get());
@@ -2072,12 +2128,13 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
             /* INDIRECT SAMPLING to generate tentative SIR samples */
 
             /* Sample directions and extra parameters */
-            Spectrum bsdfVal;
+            Spectrum bsdfValWithCosines;
             Spectrum indirectPdf = sampleIndirect(scene, sampler, its_in,
                     its_out, d_out, channelWeightedThroughput, d_in, rec_wi,
-                    extraPars, bsdfMeasure, bsdfVal);
+                    extraPars, bsdfMeasure, bsdfValWithCosines);
             if (indirectPdf.isZero())
                 continue;
+            Assert((its_in.wi - its_in.toLocal(d_in)).length() < Epsilon);
 
             /* Prevent light leaks due to the use of shading normals */
             if (dot(its_in.geoFrame.n, rec_wi)*dot(n_in, rec_wi) <= 0
@@ -2091,7 +2148,7 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
                 continue;
 
             /* Weight factor (excluding the directions&extraParams pdf) */
-            Spectrum factor = channelWeight * bsdfVal * bssrdfVal
+            Spectrum factor = channelWeight * bsdfValWithCosines * bssrdfVal
                     / thisSurfacePdf;
             if (factor.isZero())
                 continue;
@@ -2194,13 +2251,13 @@ bool DirectSamplingSubsurface::indirectSample_noSIR(
         return false;
 
     /* DIRECT SAMPLING */
-    if (m_directSampling) { do {
-        Spectrum LiDirect, bsdfVal;
+    if (m_directSampling) { do { /* do while(0) for easy 'break' */
+        Spectrum LiDirect, bsdfValWithCosines;
         EMeasure lightSamplingMeasure;
         Spectrum directPdf = sampleDirect(scene, sampler, its_in,
                 its_out, d_out, channelWeightedThroughput, d_in, rec_wi,
                 extraParams, bsdfMeasure, lightSamplingMeasure,
-                bsdfVal, LiDirect);
+                bsdfValWithCosines, LiDirect);
         if (directPdf.isZero())
             break;
 
@@ -2230,7 +2287,7 @@ bool DirectSamplingSubsurface::indirectSample_noSIR(
             effectivePdf = directPdf;
         }
 
-        Spectrum directWeight = channelWeight * bsdfVal * bssrdfVal
+        Spectrum directWeight = channelWeight * bsdfValWithCosines * bssrdfVal
                         * effectivePdf.invertButKeepZero() / surfacePdf;
 
 #if MTS_DSS_CHECK_VARIANCE_SOURCES
@@ -2240,10 +2297,10 @@ bool DirectSamplingSubsurface::indirectSample_noSIR(
             cout << "direct samp " << thisWeight.toString() << endl;
             checkSourcesOfVariance(scene, channelWeightedThroughput,
                     its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                    bssrdfVal, bsdfVal, bsdfMeasure, sampler, true);
+                    bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
             checkSourcesOfVariance(scene, channelWeightedThroughput,
                     its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                    bssrdfVal, bsdfVal, bsdfMeasure, sampler, false);
+                    bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, false);
         }
 #endif
 
@@ -2253,10 +2310,10 @@ bool DirectSamplingSubsurface::indirectSample_noSIR(
 
 
     /* INDIRECT SAMPLING */
-    Spectrum bsdfVal;
+    Spectrum bsdfValWithCosines;
     Spectrum indirectPdf = sampleIndirect(scene, sampler, its_in,
             its_out, d_out, channelWeightedThroughput, d_in, rec_wi,
-            extraParams, bsdfMeasure, bsdfVal);
+            extraParams, bsdfMeasure, bsdfValWithCosines);
     if (indirectPdf.isZero())
         return false;
 
@@ -2272,7 +2329,7 @@ bool DirectSamplingSubsurface::indirectSample_noSIR(
         return false;
 
     /* Weight factor (excluding the directions&extraParams pdf) */
-    Spectrum factor = channelWeight * bsdfVal * bssrdfVal / surfacePdf;
+    Spectrum factor = channelWeight * bsdfValWithCosines * bssrdfVal / surfacePdf;
     if (factor.isZero())
         return false;
 
@@ -2309,7 +2366,7 @@ bool DirectSamplingSubsurface::indirectSample_noSIR(
     s.rec_wi      = rec_wi;
     s.bsdfMeasure = bsdfMeasure; // only for MTS_DSS_CHECK_VARIANCE_SOURCES
     s.bssrdfVal   = bssrdfVal;   // only for MTS_DSS_CHECK_VARIANCE_SOURCES
-    s.bsdfVal     = bsdfVal;     // only for MTS_DSS_CHECK_VARIANCE_SOURCES
+    s.bsdfValWithCosines = bsdfValWithCosines; // only for MTS_DSS_CHECK_VARIANCE_SOURCES
     s.weightForDirectContrib   = factor * pdfForDirectContrib.invertButKeepZero();
     s.weightForIndirectContrib = factor * indirectPdf.invertButKeepZero();
     return true;

@@ -511,6 +511,9 @@ extern MTS_EXPORT_CORE Vector sphericalDirection(Float theta, Float phi);
 /// Convert a direction to spherical coordinates
 extern MTS_EXPORT_CORE Point2 toSphericalCoordinates(const Vector &v);
 
+/// Convert cylindrical coordinates to a direction
+extern MTS_EXPORT_CORE Vector cylindricalDirection(Float z, Float phi);
+
 
 // Online variance calulation by Knuth, referenced by Wikipedia [August 2012]
 //   http://en.wikipedia.org/wiki/Algorithms_for_calculating_variance

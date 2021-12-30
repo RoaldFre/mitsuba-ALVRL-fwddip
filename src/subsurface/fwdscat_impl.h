@@ -241,7 +241,7 @@ FS_INLINE Float FwdScat::evalPlaneSource(Vector u0, Vector uL,
 
 
 
-// Strategy weights, must sum to one
+// Strategy weights, must sum to one (TODO: possibly different weights for effective BRDF?)
 static constexpr Float lengthSample_w1 = 0.5; /* short length limit */
 static constexpr Float lengthSample_w2 = 0.5; /* long length limit */
 static constexpr Float lengthSample_w3 = 0.0; /* absorption */
@@ -260,40 +260,70 @@ FS_INLINE Float FwdScat::sampleExtraParamsMonopole(
     FSAssert(m.extraParams == extraParams);
     Float &s = *(static_cast<Float*>(extraParams));
 
+    if (m_debug_override_ps != -1) {
+        s = m_debug_override_ps / p;
+        return 1;
+    }
+    if (m_debug_uniform_ps_min != -1 && m_debug_uniform_ps_max != -1) {
+        Float delta = (m_debug_uniform_ps_max-m_debug_uniform_ps_min);
+        s = (m_debug_uniform_ps_min + delta*sampler->next1D())/p;
+        return p/delta;
+    }
+
     Float p1, p2, p3;
     p1 = p2 = p3 = -1;
     const Vector *d_inPtr = (m.hasDin() ? &m.d_in : NULL);
     const Float u = sampler->next1D();
     if (u < lengthSample_w1) {
-        p1 = sampleLengthShortLimit(m.R, d_inPtr, m.d_out, s, sampler);
+        p1 = sampleLengthShortLimit(m.R, d_inPtr, m.d_out, s, sampler, m.isPlaneSource());
         if (p1 == 0 || s == 0) {
+            Log(EWarn, "Could not sampleLengthShortLimit!");
             s = -1;
             return 0.0f;
         }
     } else if (u < lengthSample_w1 + lengthSample_w2) {
-        p2 = sampleLengthLongLimit(m.R, m.d_out, s, sampler);
+        p2 = sampleLengthLongLimit(m.R, m.d_out, s, sampler, m.isPlaneSource());
         if (p2 == 0 || s == 0) {
+            Log(EWarn, "Could not sampleLengthLongLimit!");
             s = -1;
             return 0.0f;
         }
     } else if (u < lengthSample_w1 + lengthSample_w2 + lengthSample_w3) {
         p3 = sampleLengthAbsorption(s, sampler);
         if (p3 == 0 || s == 0) {
+            Log(EWarn, "Could not sampleLengthAbsorption!");
             s = -1;
             return 0.0f;
         }
     }
 
     if (p1 == -1)
-        p1 = (lengthSample_w1 == 0 ? 0 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s));
+        p1 = (lengthSample_w1 == 0 ? 0 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s, m.isPlaneSource()));
     if (p2 == -1)
-        p2 = (lengthSample_w2 == 0 ? 0 : pdfLengthLongLimit(m.R, m.d_out, s));
+        p2 = (lengthSample_w2 == 0 ? 0 : pdfLengthLongLimit(m.R, m.d_out, s, m.isPlaneSource()));
     if (p3 == -1)
         p3 = (lengthSample_w3 == 0 ? 0 : pdfLengthAbsorption(s));
 
     Float pdf = (lengthSample_w1 * p1
                + lengthSample_w2 * p2
                + lengthSample_w3 * p3);
+
+
+    if (m_debug_uniform_ps_min != -1) {
+        Assert(m_debug_uniform_ps_max == -1);
+        if (p*s < m_debug_uniform_ps_min) {
+            s = -1;
+            return 0;
+        }
+    }
+    if (m_debug_uniform_ps_max != -1) {
+        Assert(m_debug_uniform_ps_min == -1);
+        if (p*s > m_debug_uniform_ps_max) {
+            s = -1;
+            return 0;
+        }
+    }
+
 
     FSAssert(pdf > 0);
 #ifdef MTS_FWDSCAT_DEBUG
@@ -303,11 +333,12 @@ FS_INLINE Float FwdScat::sampleExtraParamsMonopole(
                 pdf, pdfCheck, (pdf-pdfCheck)/pdf,
                 s,
                 m.hasDin(),
-                (lengthSample_w1 == 0 ? -1 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s)),
-                (lengthSample_w2 == 0 ? -1 : pdfLengthLongLimit(m.R, m.d_out, s)),
+                (lengthSample_w1 == 0 ? -1 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s, m.isPlaneSource())),
+                (lengthSample_w2 == 0 ? -1 : pdfLengthLongLimit(m.R, m.d_out, s, m.isPlaneSource())),
                 (lengthSample_w3 == 0 ? -1 : pdfLengthAbsorption(s)));
     }
 #endif
+
     return pdf;
 }
 
@@ -326,9 +357,32 @@ FS_INLINE Float FwdScat::pdfExtraParamsMonopole(const Monopole &m) const {
 
     FSAssert(s >= 0);
 
+    if (m_debug_override_ps != -1) {
+        Assert(s == m_debug_override_ps / p);
+        return 1;
+    }
+    if (m_debug_uniform_ps_min != -1 && m_debug_uniform_ps_max != -1) {
+        Assert(p*s > m_debug_uniform_ps_min);
+        Assert(p*s < m_debug_uniform_ps_max);
+        Float delta = (m_debug_uniform_ps_max-m_debug_uniform_ps_min);
+        return p/delta;
+    }
+    if (m_debug_uniform_ps_min != -1) {
+        Assert(m_debug_uniform_ps_max == -1);
+        if (p*s < m_debug_uniform_ps_min) {
+            return 0;
+        }
+    }
+    if (m_debug_uniform_ps_max != -1) {
+        Assert(m_debug_uniform_ps_min == -1);
+        if (p*s > m_debug_uniform_ps_max) {
+            return 0;
+        }
+    }
+
     const Vector *d_inPtr = (m.hasDin() ? &m.d_in : NULL);
-    Float p1 = (lengthSample_w1 == 0 ? 0 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s));
-    Float p2 = (lengthSample_w2 == 0 ? 0 : pdfLengthLongLimit(m.R, m.d_out, s));
+    Float p1 = (lengthSample_w1 == 0 ? 0 : pdfLengthShortLimit(m.R, d_inPtr, m.d_out, s, m.isPlaneSource()));
+    Float p2 = (lengthSample_w2 == 0 ? 0 : pdfLengthLongLimit(m.R, m.d_out, s, m.isPlaneSource()));
     Float p3 = (lengthSample_w3 == 0 ? 0 : pdfLengthAbsorption(s));
 
 #if 0
@@ -377,35 +431,43 @@ FS_INLINE Float FwdScat::pdfLengthAbsorption(
 
 
 FS_INLINE Float FwdScat::sampleLengthShortLimit(
-        Vector R, const Vector *u0, Vector uL, Float &s, Sampler *sampler) const {
+        Vector R, const Vector *u0, Vector uL, Float &s, Sampler *sampler, bool isPlaneSource) const {
     Float pdf;
-    implLengthShortLimit(R, u0, uL, s, sampler, &pdf);
+    implLengthShortLimit(R, u0, uL, s, sampler, &pdf, isPlaneSource);
     return pdf;
 }
 
 FS_INLINE Float FwdScat::pdfLengthShortLimit(
-        Vector R, const Vector *u0, Vector uL, Float s) const {
+        Vector R, const Vector *u0, Vector uL, Float s, bool isPlaneSource) const {
     Float pdf;
-    implLengthShortLimit(R, u0, uL, s, NULL, &pdf);
+    implLengthShortLimit(R, u0, uL, s, NULL, &pdf, isPlaneSource);
     return pdf;
 }
 
 FS_INLINE void FwdScat::implLengthShortLimit(
-        Vector R, const Vector *u0, Vector uL, Float &s, Sampler *sampler, Float *pdf) const {
+        Vector R, const Vector *u0, Vector uL, Float &s, Sampler *sampler, Float *pdf, bool isPlaneSource) const {
     if (u0 == NULL) {
-        implLengthShortLimitMargOverU0(R, uL, s, sampler, pdf);
+        implLengthShortLimitMargOverU0(R, uL, s, sampler, pdf, isPlaneSource);
     } else {
-        implLengthShortLimitKnownU0(R, *u0, uL, s, sampler, pdf);
+        implLengthShortLimitKnownU0(R, *u0, uL, s, sampler, pdf, isPlaneSource);
     }
 }
 
 FS_INLINE void FwdScat::implLengthShortLimitKnownU0(
-        Vector R, Vector u0, Vector uL, Float &s, Sampler *sampler, Float *pdf) const {
+        Vector R, Vector u0, Vector uL, Float &s, Sampler *sampler, Float *pdf, bool isPlaneSource) const {
+#if 0
+    if (isPlaneSource)
+        Log(EError, "TO IMPLEMENT");
+#endif
+
     double lRl = R.length();
     double r = lRl * p;
     if (r == 0)  {
-        if (sampler) s = 0;
-        if (pdf) *pdf = 0;
+        // Fall-back (not that intelligent...): sample according to absorption
+        if (sampler)
+            sampleLengthAbsorption(s, sampler);
+        if (pdf)
+            *pdf = pdfLengthAbsorption(s);
         return;
     }
     double cosTheta0L = math::clamp(dot(R, u0) / lRl, -1.0, 1.0)
@@ -512,28 +574,34 @@ FS_INLINE void FwdScat::implLengthShortLimitKnownU0(
 }
 
 FS_INLINE void FwdScat::implLengthShortLimitMargOverU0(
-        Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf) const {
+        Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf, bool isPlaneSource) const {
     const Float safetyFac = 3;
     const Float safetyWeight = 0.3;
     Float pdfOrig, pdfSafety;
     if (sampler) {
         if (sampler->next1D() > safetyWeight) {
-            implLengthShortLimitMargOverU0_internal(R, uL, s, sampler, &pdfSafety, safetyFac);
-            implLengthShortLimitMargOverU0_internal(R, uL, s, NULL,    &pdfOrig  , 1.0);
+            implLengthShortLimitMargOverU0_internal(R, uL, s, sampler, &pdfSafety, safetyFac, isPlaneSource);
+            implLengthShortLimitMargOverU0_internal(R, uL, s, NULL,    &pdfOrig,   1.0,       isPlaneSource);
         } else {
-            implLengthShortLimitMargOverU0_internal(R, uL, s, sampler, &pdfOrig  , 1.0);
-            implLengthShortLimitMargOverU0_internal(R, uL, s, NULL,    &pdfSafety, safetyFac);
+            implLengthShortLimitMargOverU0_internal(R, uL, s, sampler, &pdfOrig,   1.0,       isPlaneSource);
+            implLengthShortLimitMargOverU0_internal(R, uL, s, NULL,    &pdfSafety, safetyFac, isPlaneSource);
         }
     } else {
-            implLengthShortLimitMargOverU0_internal(R, uL, s, NULL,    &pdfOrig  , 1.0);
-            implLengthShortLimitMargOverU0_internal(R, uL, s, NULL,    &pdfSafety, safetyFac);
+            implLengthShortLimitMargOverU0_internal(R, uL, s, NULL,    &pdfOrig,   1.0,       isPlaneSource);
+            implLengthShortLimitMargOverU0_internal(R, uL, s, NULL,    &pdfSafety, safetyFac, isPlaneSource);
     }
     if (pdf) {
         *pdf = safetyWeight*pdfSafety + (1-safetyWeight)*pdfOrig;
     }
 }
 FS_INLINE void FwdScat::implLengthShortLimitMargOverU0_internal(
-        Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf, Float safetyFac) const {
+        Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf, Float safetyFac, bool isPlaneSource) const {
+    
+#if 0
+    if (isPlaneSource)
+        Log(EError, "TODO IMPLEMENT");
+#endif
+
     // Working in p=1, transforming back at the end
     Float lRl = R.length();
     Float r = lRl * p;
@@ -550,8 +618,11 @@ FS_INLINE void FwdScat::implLengthShortLimitMargOverU0_internal(
      */
     //if (r == 0 || r > 1) {
     if (r == 0) {
-        if (pdf) *pdf = 0;
-        if (sampler) s = 0;
+        // Fall-back (not that intelligent...): sample according to absorption
+        if (sampler)
+            sampleLengthAbsorption(s, sampler);
+        if (pdf)
+            *pdf = pdfLengthAbsorption(s);
         return;
     }
 
@@ -665,9 +736,14 @@ FS_INLINE void FwdScat::implLengthShortLimitMargOverU0_internal(
 
 // TODO: approximation that does not require a numerical cdf inversion?
 FS_INLINE Float FwdScat::sampleLengthLongLimit(
-        Vector R, Vector uL, Float &s, Sampler *sampler) const {
+        Vector R, Vector uL, Float &s, Sampler *sampler, bool isPlaneSource) const {
+
+    if (isPlaneSource)
+        return sampleLengthLongLimit_BRDF(R, uL, s, sampler);
+
     if (p == 0)
         return 0;
+
     Vector R_p1 = R*p;
     Float R2minusRdotUL_p1 = R_p1.lengthSquared() - dot(R_p1, uL);
     Float beta = 3./2. * R2minusRdotUL_p1;
@@ -748,11 +824,14 @@ FS_INLINE Float FwdScat::sampleLengthLongLimit(
                 sA, sB, e.what());
         return 0;
     }
-    return pdfLengthLongLimit(R, uL, s);
+    return pdfLengthLongLimit(R, uL, s, isPlaneSource);
 }
 
 FS_INLINE Float FwdScat::pdfLengthLongLimit(
-        Vector R, Vector uL, Float s) const {
+        Vector R, Vector uL, Float s, bool isPlaneSource) const {
+    if (isPlaneSource)
+        return pdfLengthLongLimit_BRDF(R, uL, s);
+
     if (p == 0)
         return 0;
     Float s_p1 = s * p;
@@ -771,6 +850,44 @@ FS_INLINE Float FwdScat::pdfLengthLongLimit(
     return pdf_p1 * p;
 }
 
+FS_INLINE Float FwdScat::sampleLengthLongLimit_BRDF(
+        Vector R, Vector uL, Float &s, Sampler *sampler) const {
+    return implLengthLongLimit_BRDF(R, uL, s, sampler);
+}
+
+FS_INLINE Float FwdScat::pdfLengthLongLimit_BRDF(
+        Vector R, Vector uL, Float s) const {
+    return implLengthLongLimit_BRDF(R, uL, s, NULL);
+}
+
+// TODO: let the other impl* functions also directly return a pdf because it's always needed
+FS_INLINE Float FwdScat::implLengthLongLimit_BRDF(
+        Vector R, Vector uL, Float &s, Sampler *sampler) const {
+    if (R.isZero()) {
+        Float t_mean = 0;
+        Float t_stddev = sqrt(1/(2*m_sigA));
+        Float t;
+        if (sampler) {
+            t = truncnorm(t_mean, t_stddev, 0, 1.0/0.0, sampler);
+            s = t*t;
+        } else {
+            t = sqrt(s);
+        }
+        return 1.0/(2*t) * truncnormPdf(t_mean, t_stddev, 0, 1.0/0.0, t);
+    }
+
+    /* Case R != 0 */
+
+#if 1
+    // XXX QUICK AND DIRTY FALLBACK FOR NOW
+    if (sampler)
+        sampleLengthLongLimit(R, uL, s, sampler, false);
+    return pdfLengthLongLimit(R, uL, s, false);
+#else
+    Log(EError, "TO IMPLEMENT");
+    return -1;
+#endif
+}
 
 
 
@@ -885,10 +1002,13 @@ FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_BRDF(
     /* Sample cos(theta) */
     double cosThetaSd = 1/sqrt(2*c + math::abs(a));
     FSAssert(cosThetaSd>=0);
-    if (cosThetaSd == 0)
+    if (cosThetaSd == 0) {
+        Log(EWarn, "Ended up with cosThetaSd of 0!");
         return;
+    }
     double cosThetaMean = b * math::square(cosThetaSd);
     double cosTheta;
+   
     if (sampler) {
         cosTheta = truncnorm(cosThetaMean, cosThetaSd, -1.0, 0.0, sampler);
     } else {
@@ -907,10 +1027,18 @@ FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_BRDF(
      *       - around phi=pi if a<0 (i.e. cos(phi) -> -1  => phi->pi)
      */
     double phiSd = 1.0 / sqrt(math::abs(a) * sinTheta);
-    if (phiSd == 0)
+    if (phiSd == 0) {
+        Log(EWarn, "Ended up with phiSd of 0!");
         return;
+    }
     double phiMean, phiLo, phiHi;
-    if (a > 0) {
+    /* XXX TODO XXX TODO
+     * I have flipped the condition below, because we were off by an 
+     * offset of pi otherwise!
+     * TODO: Figure out what went wrong during derivation and update text!
+     * XXX TODO XXX TODO */
+    //if (a >= 0) {
+    if (a < 0) {
         phiMean = 0;
         phiLo = -M_PI_DBL;
         phiHi =  M_PI_DBL;
@@ -919,6 +1047,7 @@ FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_BRDF(
         phiLo = 0;
         phiHi = TWO_PI_DBL;
     }
+
     double phi;
     if (sampler) {
         phi = truncnorm(phiMean, phiSd, phiLo, phiHi, sampler);
@@ -1189,7 +1318,7 @@ FS_INLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_orig(
     FSAssertWarn(badlyConditioned || math::abs(dot(zeroPhiDir, n0) < Epsilon));
     FSAssertWarn(badlyConditioned || dot(upDir, n0) <= Epsilon); // negative with safety epsilon
 
-#if MTS_FWDSCAT_DEBUG
+#ifdef MTS_FWDSCAT_DEBUG
     /* This can become bad when roundCosThetaForStability is too agressive... */
     // The point at the extremal cosine should lie exactly in the plane
     if (minCosTheta != -1)
@@ -1435,12 +1564,11 @@ FS_INLINE double sampleExpCos_dPhi(double a, double &phi, Sampler *sampler) {
         phiLo = 0;
         phiHi = TWO_PI_DBL;
     }
-    if (sampler && !doUniformSamplingInstead) {
-        phi = truncnorm(phiMean, phiSd, phiLo, phiHi, sampler);
-    }
-
-    if (sampler && doUniformSamplingInstead) {
-        phi = phiLo + sampler->next1D() * (phiHi - phiLo);
+    if (sampler) {
+        if (doUniformSamplingInstead) 
+            phi = phiLo + sampler->next1D() * (phiHi - phiLo);
+        else
+            phi = truncnorm(phiMean, phiSd, phiLo, phiHi, sampler);
     }
 
     double phiForPdf;
@@ -1549,6 +1677,7 @@ FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_bis(
     FSAssert(math::abs(dot(x,y)) < Epsilon);
     FSAssert(math::abs(dot(x,z)) < Epsilon);
     FSAssert(math::abs(dot(y,z)) < Epsilon);
+    FSAssert(math::abs(y.length() - 1) < Epsilon);
 
     /* Sample cos(theta) */
     double a = dot(H,x);

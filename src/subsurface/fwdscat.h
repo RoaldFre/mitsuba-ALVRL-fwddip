@@ -28,15 +28,35 @@ public:
             Log(EError, "Valid values for g are in [0,1). "
                     "Sensible values are close to 1.");
         }
+
+        m_debug_override_ps = props.getFloat("debug_override_ps", -1);
+        m_debug_uniform_ps_min = props.getFloat("debug_uniform_ps_min", -1);
+        m_debug_uniform_ps_max = props.getFloat("debug_uniform_ps_max", -1);
+        m_debug_requested_hemi_weight = props.getFloat("debug_requested_hemi_weight", -1);
+        Log(EInfo, "FWDSCAT DEBUG: ps[%f|%f..%f], hemi %f", 
+                m_debug_override_ps,
+                m_debug_uniform_ps_min,
+                m_debug_uniform_ps_max,
+                m_debug_requested_hemi_weight);
+
+        Log(EInfo, "Loaded FwdScat medium with p = %f", p);
     }
 
     FwdScat(Stream *stream, InstanceManager *manager) :
             DipoleModel(stream, manager),
-            p(stream->readFloat()) { }
+            p(stream->readFloat()),
+            m_debug_override_ps(stream->readFloat()),
+            m_debug_uniform_ps_min(stream->readFloat()),
+            m_debug_uniform_ps_max(stream->readFloat()),
+            m_debug_requested_hemi_weight(stream->readFloat()) { }
 
     void serialize(Stream *stream, InstanceManager *manager) const {
         DipoleModel::serialize(stream, manager);
         stream->writeFloat(p);
+        stream->writeFloat(m_debug_override_ps);
+        stream->writeFloat(m_debug_uniform_ps_min);
+        stream->writeFloat(m_debug_uniform_ps_max);
+        stream->writeFloat(m_debug_requested_hemi_weight);
     }
 
     std::string toString() const {
@@ -54,7 +74,10 @@ public:
     }
 
     virtual Float getRequestedDirectionalCosineHemisphereWeight() const {
-        return 0.1;
+        if (m_debug_requested_hemi_weight < 0)
+            return 0.1;
+        Log(EInfo, "RETURNING DEBUG HEMI WEIGHT %f", m_debug_requested_hemi_weight);
+        return m_debug_requested_hemi_weight;
     }
 
     virtual Float evalMonopole(const Monopole &m) const;
@@ -98,23 +121,26 @@ protected:
 
     /// Returns the pdf
     Float sampleLengthShortLimit(
-            Vector R, const Vector *u0, Vector uL, Float &s, Sampler *sampler) const;
+            Vector R, const Vector *u0, Vector uL, Float &s, Sampler *sampler, bool isPlaneSource) const;
     Float pdfLengthShortLimit(
-            Vector R, const Vector *u0, Vector uL, Float s) const;
+            Vector R, const Vector *u0, Vector uL, Float s, bool isPlaneSource) const;
     void implLengthShortLimit(
-            Vector R, const Vector *u0, Vector uL, Float &s, Sampler *sampler, Float *pdf) const;
+            Vector R, const Vector *u0, Vector uL, Float &s, Sampler *sampler, Float *pdf, bool isPlaneSource) const;
     void implLengthShortLimitKnownU0(
-            Vector R, Vector u0, Vector uL, Float &s, Sampler *sampler, Float *pdf) const;
+            Vector R, Vector u0, Vector uL, Float &s, Sampler *sampler, Float *pdf, bool isPlaneSource) const;
     void implLengthShortLimitMargOverU0(
-            Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf) const;
+            Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf, bool isPlaneSource) const;
     void implLengthShortLimitMargOverU0_internal(
-            Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf, Float safetyFac) const;
+            Vector R, Vector uL, Float &s, Sampler *sampler, Float *pdf, Float safetyFac, bool isPlaneSource) const;
+    Float sampleLengthLongLimit_BRDF(Vector R, Vector uL, Float &s, Sampler *sampler) const;
+    Float pdfLengthLongLimit_BRDF(Vector R, Vector uL, Float s) const;
+    Float implLengthLongLimit_BRDF(Vector R, Vector uL, Float &s, Sampler *sampler) const;
 
     /// Returns the pdf
     Float sampleLengthLongLimit(
-            Vector R, Vector uL, Float &s, Sampler *sampler) const;
+            Vector R, Vector uL, Float &s, Sampler *sampler, bool isPlaneSource) const;
     Float pdfLengthLongLimit(
-            Vector R, Vector uL, Float s) const;
+            Vector R, Vector uL, Float s, bool isPlaneSource) const;
 
     /// Returns the pdf
     Float sampleLengthAbsorption(
@@ -162,6 +188,11 @@ protected:
             Float s, Sampler *sampler, Float *pdf) const;
 
     const Float p;  /// Inverse length scale of forward scattering model
+
+    Float m_debug_override_ps;
+    Float m_debug_uniform_ps_min;
+    Float m_debug_uniform_ps_max;
+    Float m_debug_requested_hemi_weight;
 
     MTS_DECLARE_CLASS();
 };
