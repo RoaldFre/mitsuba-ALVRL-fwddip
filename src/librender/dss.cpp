@@ -197,6 +197,9 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     m_maxInternalReflections = props.getInteger(
             "maxInternalReflections", -1);
 
+    m_internalReflectionWeight = props.getFloat(
+            "internalReflectionWeight", 1.0);
+
     m_noRecursiveSubsurf = props.getBoolean(
             "noRecursiveSubsurf", false);
 
@@ -207,9 +210,9 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
 
     if ((m_numSIRsurface > 1 || m_SIRnonSurfaceOversamplingFactor > 1)
             && !(m_directSampling && m_directSamplingMIS)) {
-        Log(EWarn, "ATTENTION: numSIRsurface or "
+        Log(EError, "Implementation caveat: numSIRsurface or "
                 "m_SIRnonSurfaceOversamplingFactor is > 1 (they're %d and %d), "
-                "which means that direct sampling with MIS weighting gets "
+                "which would mean that direct sampling with MIS weighting gets "
                 "FORCED, even though those options were not requested! "
                 "(requested: direct sampling %d, MIS %d)",
                 m_numSIRsurface, m_SIRnonSurfaceOversamplingFactor,
@@ -220,10 +223,11 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
 
     Log(EInfo, "DirectSamplingSubsurface settings: directSampling %d, "
             "MIS %d, singleChannel %d, allowIncomingOutgoingDirections %d, "
-            "minIntRefl %d, maxIntRefl %d",
+            "minIntRefl %d, maxIntRefl %d, irw %f",
             m_directSampling, m_directSamplingMIS,
             m_singleChannel, m_allowIncomingOutgoingDirections,
-            m_minInternalReflections, m_maxInternalReflections);
+            m_minInternalReflections, m_maxInternalReflections,
+            m_internalReflectionWeight);
     {
         LockGuard lock(sourcesMutex);
         m_sourcesIndex = sourcesIndex++;
@@ -256,6 +260,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(Stream *stream,
     m_itsDistanceCutoff = stream->readFloat();
     m_minInternalReflections = stream->readInt();
     m_maxInternalReflections = stream->readInt();
+    m_internalReflectionWeight = stream->readFloat();
     m_noRecursiveSubsurf = stream->readBool();
     /* Note: serialize gets called before preprocess, so we can't pass
      * m_nonCollimatedLightSourcesPresent information here. So for safety: */
@@ -276,6 +281,7 @@ void DirectSamplingSubsurface::serialize(Stream *stream,
     stream->writeFloat(m_itsDistanceCutoff);
     stream->writeInt(m_minInternalReflections);
     stream->writeInt(m_maxInternalReflections);
+    stream->writeFloat(m_internalReflectionWeight);
     stream->writeBool(m_noRecursiveSubsurf);
     /* Note: serialize gets called before preprocess, so we can't pass
      * m_nonCollimatedLightSourcesPresent information here. */
@@ -1831,7 +1837,8 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
              * again, but just handle this through local recursion right
              * here until we break out of the medium. */
              // internal reflection, so there is no direct Li here
-            Spectrum thisWeight = indirectSample.weightForIndirectContrib;
+            Spectrum thisWeight = indirectSample.weightForIndirectContrib
+                                   * m_internalReflectionWeight;
             Spectrum newThroughput = throughput * thisWeight;
             if (newThroughput.isZero())
                 goto DSS_Li_radianceSourceSampling;

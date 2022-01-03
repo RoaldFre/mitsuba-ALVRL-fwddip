@@ -1205,6 +1205,7 @@ protected:
     bool m_nonCollimatedLightSourcesPresent;
     int m_maxInternalReflections; /// Maximum number of subsequent internal reflections (<0 for unbounded)
     int m_minInternalReflections; /// Minimum number of subsequent internal reflections (<0 for unbounded), mostly useful for debugging
+    Float m_internalReflectionWeight; /// Extra weighting factor for internal reflections, mostly for debugging purposes
     bool m_noRecursiveSubsurf; /// For debug: don't include subsurf Li in recursive query
     ref_vector<const SurfaceSampler> m_surfaceSamplers;
     DiscreteDistribution m_weights;
