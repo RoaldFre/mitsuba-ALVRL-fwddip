@@ -35,7 +35,7 @@ MTS_NAMESPACE_BEGIN
 #define MTS_DSS_CHECK_VARIANCE_SOURCES false
 /* If the flag above is set, then only dump variance information when the
  * sample weight exceeds this threshold. */
-#define MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD 1000
+#define MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD 2000
 /* Support external collimated light sources? This is useful for synthetic
  * 'half-infinite medium, searchlight-type' test scenes, for instance.
  * Set to false when using adaptive integrator, as that is currently broken
@@ -1865,8 +1865,8 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
             const Spectrum &bssrdfVal          = indirectSample.bssrdfVal;
             if (thisWeight.maxAbsolute()
                     > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
-                cout << "indirect internal reflection"
-                        << thisWeight.toString() << endl;
+                cerr << "indirect internal reflection "
+                        <<thisWeight.maxAbsolute()<<" "<< thisWeight.toString() << endl;
                 checkSourcesOfVariance(scene, channelWeightedThroughput,
                         its_out, d_out, its_in, d_in, rec_wi, extraParams,
                         bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
@@ -1944,7 +1944,7 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
                 const EMeasure &bsdfMeasure        = indirectSample.bsdfMeasure;
                 const Spectrum &bsdfValWithCosines = indirectSample.bsdfValWithCosines;
                 const Spectrum &bssrdfVal          = indirectSample.bssrdfVal;
-                cout << "indirect query" << thisWeight.toString() << endl;
+                cerr << "indirect query "<<thisWeight.maxAbsolute()<<" " << thisWeight.toString() << endl;
                 checkSourcesOfVariance(scene, channelWeightedThroughput,
                         its_out, d_out, its_in, d_in, rec_wi, extraParams,
                         bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
@@ -2115,7 +2115,7 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
                 Spectrum thisWeight = directWeight;
                 if (thisWeight.maxAbsolute()
                         > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
-                    cerr << "["<<thisWeight.maxAbsolute()<<"] direct samp " << thisWeight.toString() << endl;
+                    cerr <<"direct samp "<<thisWeight.maxAbsolute()<<" " << thisWeight.toString() << endl;
                     checkSourcesOfVariance(scene, channelWeightedThroughput,
                             its_out, d_out, its_in, d_in, rec_wi,
                             directExtraParams, directBssrdfVal, directBsdfVal,
@@ -2301,7 +2301,7 @@ bool DirectSamplingSubsurface::indirectSample_noSIR(
         Spectrum thisWeight = directWeight;
         if (thisWeight.maxAbsolute()
                 > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
-            cout << "direct samp " << thisWeight.toString() << endl;
+            cerr << "direct samp "<<thisWeight.maxAbsolute()<<" " << thisWeight.toString() << endl;
             checkSourcesOfVariance(scene, channelWeightedThroughput,
                     its_out, d_out, its_in, d_in, rec_wi, extraParams,
                     bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
