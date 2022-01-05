@@ -467,6 +467,32 @@ int Spectrum::sampleNonZeroChannelUniform(Sampler *sampler) const {
     return channel;
 }
 
+int Spectrum::sampleWeightedChannel(Sampler *sampler, Spectrum *probDistPtr) const {
+    int channel = -1;
+    Spectrum probDist;
+    if (isZero()) {
+        channel = sampler->next1D() * SPECTRUM_SAMPLES;
+        probDist = Spectrum(0.0f);
+    } else {
+        Float theSum = sumOfAbs();
+        Float x = sampler->next1D() * theSum;
+        Float cumsum = 0;
+        for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
+            cumsum += math::abs(s[i]);
+            if (cumsum >= x) {
+                channel = i;
+                probDist = *this / theSum;
+                break;
+            }
+        }
+    }
+
+    SAssert(channel >= 0 && channel < SPECTRUM_SAMPLES);
+    if (probDistPtr)
+        *probDistPtr = probDist;
+    return channel;
+}
+
 std::string Spectrum::toString() const {
     std::ostringstream oss;
     oss << "[";

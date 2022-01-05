@@ -506,6 +506,22 @@ public:
         return result * (1.0f / numNonNan);
     }
 
+    /// Return the sum over all wavelengths
+    inline Scalar sum() const {
+        Scalar result = 0.0f;
+        for (int i=0; i<N; i++)
+            result += s[i];
+        return result;
+    }
+
+    /// Return the sum over all wavelengths of the absolute value of this spectrum
+    inline Scalar sumOfAbs() const {
+        Scalar result = 0.0f;
+        for (int i=0; i<N; i++)
+            result += math::abs(s[i]);
+        return result;
+    }
+
     /// Component-wise absolute value
     inline TSpectrum abs() const {
         TSpectrum value;
@@ -930,7 +946,28 @@ public:
         return N;
     }
 
+    /**
+     * \brief Returns the index of the non-zero channel, or -1 if none or 
+     * multiple channels are non-zero.
+     */
+    inline int getNonZeroChannel() const {
+        int nonZeroChannel = -1;
+        for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
+            if (s[i] != 0) {
+                if (nonZeroChannel == -1) {
+                    nonZeroChannel = i; // first non-zero
+                } else {
+                    return -1; // multiple non-zero!
+                }
+            }
+        }
+        return nonZeroChannel;
+    }
+
     int sampleNonZeroChannelUniform(Sampler *sampler) const;
+
+    /* Samples a spectral channel weighted by the absolute value of this spectrum. */
+    int sampleWeightedChannel(Sampler *sampler, Spectrum *probDistPtr=NULL) const;
 
     inline Spectrum zeroMask() const {
         Spectrum mask;

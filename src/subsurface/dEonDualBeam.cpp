@@ -98,8 +98,8 @@ public:
 
                 Float u, v, uPdf, vPdf;
                 Assert(m_uvSampler.get());
-                bool success = m_uvSampler->sampleMIS(i, u, sampler, &uPdf)
-                            && m_uvSampler->sampleMIS(i, v, sampler, &vPdf);
+                bool success = m_uvSampler->sample(i, u, sampler, &uPdf)
+                            && m_uvSampler->sample(i, v, sampler, &vPdf);
                 if (!success) {
                     us[i] = -1;
                     vs[i] = -1;

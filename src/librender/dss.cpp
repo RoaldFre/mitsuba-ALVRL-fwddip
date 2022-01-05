@@ -585,7 +585,7 @@ static inline std::vector<Intersection> roundItssForStability(
 Float WeightIntersectionSampler::sample(
         const std::vector<Intersection> &intersections, Intersection &newIts,
         const Intersection &its_out, const Vector &d_out,
-        int channel, Sampler *sampler) const {
+        const Spectrum &throughput, Sampler *sampler) const {
     SAssert(intersections.size() != 0);
     Float intersectionProb;
     Vector n_geo(0.0f);
@@ -595,7 +595,7 @@ Float WeightIntersectionSampler::sample(
      * the corresponding original one, of course) */
     std::vector<Intersection> safeItss = roundItssForStability(intersections);
     for (size_t i = 0; i < safeItss.size(); i++) {
-        weights[i] = channelMean(channel,
+        weights[i] = channelWeightedMean(throughput,
                     [=] (int chan) { return m_intersectionWeight(
                         safeItss[i], its_out, d_out, chan); });
         Assert(weights[i] >= 0);
@@ -622,7 +622,7 @@ Float WeightIntersectionSampler::sample(
     SAssert(!n_geo.isZero());
 
     if (!check_pdf_consistency("weightIts", intersectionProb,
-            pdf(intersections, newIts, its_out, d_out, channel)))
+            pdf(intersections, newIts, its_out, d_out, throughput)))
         return 0;;
     return intersectionProb;
 }
@@ -630,14 +630,14 @@ Float WeightIntersectionSampler::sample(
 Float WeightIntersectionSampler::pdf(
         const std::vector<Intersection> &intersections,
         const Intersection &newIts, const Intersection &its_out,
-        const Vector &d_out, int channel) const {
+        const Vector &d_out, const Spectrum &throughput) const {
     SAssert(intersections.size() != 0);
 
     std::vector<Intersection> safeItss = roundItssForStability(intersections);
     Intersection newSafeIts = roundItsForStability(newIts);
 
     /* Find our weight */
-    Float ourWeight = channelMean(channel,
+    Float ourWeight = channelWeightedMean(throughput,
                     [=] (int chan) { return m_intersectionWeight(
                         newSafeIts, its_out, d_out, chan); });
     Assert(ourWeight >= 0);
@@ -645,7 +645,7 @@ Float WeightIntersectionSampler::pdf(
     size_t ourIdx = (size_t) -1;
     Float cumulWeight = 0;
     for (size_t i = 0; i < intersections.size(); i++) {
-        Float thisWeight = channelMean(channel,
+        Float thisWeight = channelWeightedMean(throughput,
                     [=] (int chan) { return m_intersectionWeight(
                         safeItss[i], its_out, d_out, chan); });
         Assert(thisWeight >= 0);
@@ -681,7 +681,7 @@ Float WeightIntersectionSampler::pdf(
         for (size_t i = 0; i < intersections.size(); i++) {
             if (i == ourIdx)
                 continue;
-            Float thisWeight = channelMean(channel,
+            Float thisWeight = channelWeightedMean(throughput,
                         [=] (int chan) { return m_intersectionWeight(
                             safeItss[i], its_out, d_out, chan); });
             sumOfOtherWeights += thisWeight;
@@ -703,7 +703,7 @@ Float WeightIntersectionSampler::pdf(
 Float UniformSurfaceSampler::sample(const Intersection &its,
         const Vector &d_out, const Scene *scene,
         const std::vector<Shape *> &shapes,
-        Intersection &newIts, int channel,
+        Intersection &newIts, const Spectrum &throughput,
         Sampler *sampler) const {
     size_t N = shapes.size();
     Float weights[N];
@@ -732,7 +732,7 @@ Float UniformSurfaceSampler::sample(const Intersection &its,
 Float UniformSurfaceSampler::pdf(const Intersection &its,
         const Vector &d_out, const Scene *scene,
         const std::vector<Shape *> &shapes,
-        const Intersection &newIts, int channel) const {
+        const Intersection &newIts, const Spectrum &throughput) const {
     Float SA = 0;
     for (auto shape : shapes) {
         SA += shape->getSurfaceArea();
@@ -744,7 +744,7 @@ Float UniformSurfaceSampler::pdf(const Intersection &its,
 Float BRDFDeltaSurfaceSampler::sample(const Intersection &its,
         const Vector &d_out, const Scene *scene,
         const std::vector<Shape *> &shapes,
-        Intersection &newIts, int channel,
+        Intersection &newIts, const Spectrum &throughput,
         Sampler *sampler) const {
     newIts = its;
     return 1.0;
@@ -753,7 +753,7 @@ Float BRDFDeltaSurfaceSampler::sample(const Intersection &its,
 Float BRDFDeltaSurfaceSampler::pdf(const Intersection &its,
         const Vector &d_out, const Scene *scene,
         const std::vector<Shape *> &shapes,
-        const Intersection &newIts, int channel) const {
+        const Intersection &newIts, const Spectrum &throughput) const {
     if (distance(newIts.p, its.p) <= Epsilon*Vector(its.p).length())
         return 1.0f;
     return 0.0f;
@@ -803,14 +803,11 @@ static void getExtremalPlaneValues(const Vector &u, const Vector &v,
 Float ProjSurfaceSampler::sample(const Intersection &its,
         const Vector &d_out, const Scene *scene,
         const std::vector<Shape *> &shapes,
-        Intersection &newIts, int channel,
+        Intersection &newIts, const Spectrum &throughput,
         Sampler *sampler) const {
-    /* Sample from the uniformly weighted sum of the pdfs associated with
-     * the different spectral channels. First pick a single channel
-     * uniformly. */
-    int chosenChannel = channel == -1
-            ? sampler->next1D() * SPECTRUM_SAMPLES
-            : channel;
+    /* Sample from the throughput-weighted sum of the pdfs associated with
+     * the different spectral channels. First pick a single channel. */
+    int chosenChannel = throughput.sampleWeightedChannel(sampler);
 
     Vector n = its.shFrame.n; // NOTE: should be the same in getProjFrame()
     Float cosTheta = dot(n, d_out);
@@ -875,7 +872,7 @@ Float ProjSurfaceSampler::sample(const Intersection &its,
      */
     Float intersectionProb = m_itsSampler->sample(newIts, scene,
             o, projectionDir, its.time,
-            shapes, its, d_out, channel, sampler);
+            shapes, its, d_out, throughput, sampler);
     if (intersectionProb == 0)
         return 0.0f;
 
@@ -888,7 +885,7 @@ Float ProjSurfaceSampler::sample(const Intersection &its,
     }
 
     /* MIS pdf for the 2D point on the plane */
-    Float planePdf = channelMean(channel,
+    Float planePdf = channelWeightedMean(throughput,
                     [=] (int chan) { return m_planeSampler->pdf(
                                        chan, x, cosTheta, xLo, xHi); });
 
@@ -904,7 +901,7 @@ Float ProjSurfaceSampler::sample(const Intersection &its,
             * math::abs(dot(n_geo, projectionDir));
 
     if (!check_pdf_consistency_t("projSurface", thePdf,
-            pdf(its, d_out, scene, shapes, newIts, channel),
+            pdf(its, d_out, scene, shapes, newIts, throughput),
             0.2 /* Allow rather big error because inherently difficult sampling */))
         return 0;
 
@@ -914,7 +911,7 @@ Float ProjSurfaceSampler::sample(const Intersection &its,
 Float ProjSurfaceSampler::pdf(const Intersection &its,
         const Vector &d_out, const Scene *scene,
         const std::vector<Shape *> &shapes,
-        const Intersection &newIts, int channel) const {
+        const Intersection &newIts, const Spectrum &throughput) const {
     Vector u, v, projectionDir;
     getProjFrame(u, v, projectionDir, its, d_out);
 
@@ -938,7 +935,7 @@ Float ProjSurfaceSampler::pdf(const Intersection &its,
 
     /* Pdf of the point in the tangent plane in its area measure, taking
      * into account that we could have sampled from any channel */
-    Float planePdf = channelMean(channel,
+    Float planePdf = channelWeightedMean(throughput,
                     [=] (int chan) { return m_planeSampler->pdf(
                                        chan, x, cosTheta, xLo, xHi); });
     if (planePdf == 0)
@@ -953,7 +950,7 @@ Float ProjSurfaceSampler::pdf(const Intersection &its,
      * from during the sampling step (point 'o'): */
     Float intersectionProb = m_itsSampler->pdf(newIts, scene,
             newIts.p, projectionDir, its.time,
-            shapes, its, d_out, channel);
+            shapes, its, d_out, throughput);
     if (intersectionProb == 0)
         return 0.0f;
 

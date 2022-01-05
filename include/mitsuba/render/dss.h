@@ -54,57 +54,36 @@
  * for debugging. */
 #define MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR false
 
+/* Throughput-weighted channel sampling instead of uniform sampling when 
+ * single channel mode is enforced. */
+#define MTS_DSS_SINGLE_CHANNEL_WEIGHTED_SAMPLING true
+
 MTS_NAMESPACE_BEGIN
 
 /**
- * Wrapper for averaging a value over channels that explicitly handles the
- * single-channel case.
+ * Wrapper for averaging a value weighted over channels.
  *
  * Note: not using std::function wrapper but purely generic F for
  * inlining/optimization reasons.
  *
+ * \param channelWeights The weights. These may contain negative values, 
+ *                       the weighting is performed using absolute values.
  * \param f A callable object (function [pointer] or lambda expression)
  *          that takes a channel-index as single argument and returns a
- *          float.
- * \param channel If set to -1: average over all channels, otherwise only
- *                return the result for this given channel.
+ *          Float.
  */
 template<typename F>
-inline Float channelMean(int channel, const F f) {
-    if (channel == -1) {
-        Float sum = 0;
-        for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
-            sum += f(i);
-        }
-        return sum / SPECTRUM_SAMPLES;
-    } else {
-        return f(channel);
+inline Float channelWeightedMean(const Spectrum &channelWeights, const F f) {
+    SAssert(!channelWeights.isZero());
+    Float weightedSum = 0;
+    for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
+        if (channelWeights[i] == 0)
+            continue;
+        weightedSum += math::abs(channelWeights[i]) * f(i);
     }
+    return weightedSum / channelWeights.sumOfAbs();
 }
 
-/**
- * Wrapper for averaging a value over channels for which the given
- * throughput is nonzero.
- *
- * Note: not using std::function wrapper but purely generic F for
- * inlining/optimization reasons.
- *
- * \param f A callable object (function [pointer] or lambda expression)
- *          that takes a channel-index as single argument and returns a
- *          float.
- */
-template<typename F>
-inline Float nonzeroThroughputMean(const Spectrum &throughput, const F f) {
-    Float sum = 0;
-    int N = 0;
-    for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
-        if (throughput[i] != 0) {
-            sum += f(i);
-            N++;
-        }
-    }
-    return sum / N;
-}
 
 
 /**
@@ -185,7 +164,6 @@ protected:
 };
 
 
-// channel can be -1 (= MIS over all channels)
 class MTS_EXPORT_RENDER IntersectionSampler : public Object {
 public:
     IntersectionSampler(Float itsDistanceCutoff) :
@@ -194,31 +172,31 @@ public:
     virtual Float sample(const std::vector<Intersection> &intersections,
             Intersection &newIts,
             const Intersection &its_out, const Vector &d_out,
-            int channel, Sampler *sampler) const = 0;
+            const Spectrum &throughput, Sampler *sampler) const = 0;
 
     virtual Float pdf(const std::vector<Intersection> &intersections,
             const Intersection &newIts,
             const Intersection &its_out, const Vector &d_out,
-            int channel) const = 0;
+            const Spectrum &throughput) const = 0;
 
     Float sample(Intersection &newIts,
             const Scene *scene, const Point &origin, const Vector &direction,
             Float time, const std::vector<Shape *> &shapes,
             const Intersection &its_out, const Vector &d_out,
-            int channel, Sampler *sampler, bool bidirectional = true) const {
+            const Spectrum &throughput, Sampler *sampler, bool bidirectional = true) const {
         const std::vector<Intersection> intersections =
                 collectIntersections(scene, origin, direction, time,
                         shapes, its_out, bidirectional);
         if (intersections.size() == 0)
             return 0;
-        return sample(intersections, newIts, its_out, d_out, channel, sampler);
+        return sample(intersections, newIts, its_out, d_out, throughput, sampler);
     }
 
     Float pdf(const Intersection &newIts,
             const Scene *scene, const Point &origin, const Vector &direction,
             Float time, const std::vector<Shape *> &shapes,
             const Intersection &its_out, const Vector &d_out,
-            int channel, bool bidirectional = true) const {
+            const Spectrum &throughput, bool bidirectional = true) const {
         const std::vector<Intersection> intersections =
                 collectIntersections(scene, origin, direction, time,
                         shapes, its_out, bidirectional);
@@ -226,7 +204,7 @@ public:
             SLog(EWarn, "Could not find any intersection, not even our own!");
             return 0.0f;
         }
-        return pdf(intersections, newIts, its_out, d_out, channel);
+        return pdf(intersections, newIts, its_out, d_out, throughput);
     }
 
     std::vector<Intersection> collectIntersections(const Scene *scene,
@@ -273,7 +251,6 @@ protected:
     Float m_itsDistanceCutoff;
 };
 
-// channel can be -1 (= MIS over all channels)
 class MTS_EXPORT_RENDER MISIntersectionSampler final : public IntersectionSampler {
 public:
     MISIntersectionSampler(const std::vector<std::pair<Float, const IntersectionSampler*> > &samplers) :
@@ -301,10 +278,10 @@ public:
     Float sample(const std::vector<Intersection> &intersections,
             Intersection &newIts,
             const Intersection &its_out, const Vector &d_out,
-            int channel, Sampler *sampler) const {
+            const Spectrum &throughput, Sampler *sampler) const {
         size_t i = m_weights.sample(sampler->next1D());
         Float thePdf = m_weights[i] * m_samplers[i]->sample(
-                intersections, newIts, its_out, d_out, channel, sampler);
+                intersections, newIts, its_out, d_out, throughput, sampler);
         Assert(std::isfinite(thePdf));
         if (thePdf == 0)
             return 0;
@@ -312,7 +289,7 @@ public:
             if (j == i)
                 continue;
             Float thisPdf = m_samplers[j]->pdf(
-                    intersections, newIts, its_out, d_out, channel);
+                    intersections, newIts, its_out, d_out, throughput);
             Assert(thisPdf >= 0);
             thePdf += m_weights[j] * thisPdf;
             Assert(std::isfinite(thePdf));
@@ -322,11 +299,11 @@ public:
 
     Float pdf(const std::vector<Intersection> &intersections,
             const Intersection &newIts, const Intersection &its_out,
-            const Vector &d_out, int channel) const {
+            const Vector &d_out, const Spectrum &throughput) const {
         Float thePdf = 0;
         for (size_t j = 0; j < m_weights.size(); j++) {
             Float thisPdf = m_samplers[j]->pdf(
-                    intersections, newIts, its_out, d_out, channel);
+                    intersections, newIts, its_out, d_out, throughput);
             Assert(thisPdf >= 0);
             thePdf += m_weights[j] * thisPdf;
             Assert(std::isfinite(thePdf));
@@ -344,7 +321,6 @@ protected:
 /// weight = f(its_in, its_out, d_out, spectralChannel)
 typedef std::function<Float(const Intersection&, const Intersection&, const Vector&, int)> IntersectionWeightFunc;
 
-// channel can be -1 (= MIS over all channels)
 class MTS_EXPORT_RENDER WeightIntersectionSampler final : public IntersectionSampler {
 public:
     WeightIntersectionSampler(IntersectionWeightFunc intersectionWeight,
@@ -354,11 +330,11 @@ public:
     virtual Float sample(const std::vector<Intersection> &intersections,
             Intersection &newIts,
             const Intersection &its_out, const Vector &d_out,
-            int channel, Sampler *sampler) const ;
+            const Spectrum &throughput, Sampler *sampler) const ;
     virtual Float pdf(const std::vector<Intersection> &intersections,
             const Intersection &newIts,
             const Intersection &its_out, const Vector &d_out,
-            int channel) const ;
+            const Spectrum &throughput) const ;
     virtual ~WeightIntersectionSampler() { }
 
 protected:
@@ -366,7 +342,7 @@ protected:
     const IntersectionWeightFunc m_intersectionWeight;
 };
 
-/// weight = f(distance, spectralChannel), channel is valid (i.e. not -1)
+/// weight = f(distance, spectralChannel), channel is valid
 typedef std::function<Float(Float,int)> DistanceWeightFunc;
 
 inline IntersectionWeightFunc distanceWeightWrapper(DistanceWeightFunc f) {
@@ -397,25 +373,6 @@ public:
     virtual bool sample(int channel, Float &x,
             Sampler *sampler, Float *pdf = NULL) const = 0;
     virtual Float pdf(int channel, Float x) const = 0;
-
-    /// Accepts channel=-1 for MIS sampling over channels
-    bool sampleMIS(int channel, Float &x,
-            Sampler *sampler, Float *pdf = NULL) const {
-        if (channel != -1)
-            return sample(channel, x, sampler, pdf);
-        Float chosenChannel = sampler->next1D() * SPECTRUM_SAMPLES;
-        if (!sample(chosenChannel, x, sampler, NULL))
-            return false;
-        if (pdf)
-            *pdf = pdfMIS(channel, x);
-        return true;
-    }
-
-    /// Accepts channel=-1 for MIS sampling over channels
-    bool pdfMIS(int channel, Float x) const {
-        return channelMean(channel,
-                [=] (int chan) { return pdf(chan, x); });
-    }
 
     MTS_DECLARE_CLASS();
 protected:
@@ -595,17 +552,15 @@ protected:
 
 class MTS_EXPORT_RENDER SurfaceSampler : public Object {
 public:
-    // channel can be -1
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             const std::vector<Shape *> &shapes,
-            Intersection &newIts, int channel,
+            Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const = 0;
-    // channel can be -1
     virtual Float pdf(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             const std::vector<Shape *> &shapes,
-            const Intersection &newIts, int channel) const = 0;
+            const Intersection &newIts, const Spectrum &throughput) const = 0;
 
     MTS_DECLARE_CLASS();
 protected:
@@ -619,12 +574,12 @@ public:
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             const std::vector<Shape *> &shapes,
-            Intersection &newIts, int channel,
+            Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const;
     virtual Float pdf(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             const std::vector<Shape *> &shapes,
-            const Intersection &newIts, int channel) const;
+            const Intersection &newIts, const Spectrum &throughput) const;
 
     MTS_DECLARE_CLASS();
 protected:
@@ -640,12 +595,12 @@ public:
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             const std::vector<Shape *> &shapes,
-            Intersection &newIts, int channel,
+            Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const;
     virtual Float pdf(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             const std::vector<Shape *> &shapes,
-            const Intersection &newIts, int channel) const;
+            const Intersection &newIts, const Spectrum &throughput) const;
 
     MTS_DECLARE_CLASS();
 protected:
@@ -667,13 +622,13 @@ public:
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             const std::vector<Shape *> &shapes,
-            Intersection &newIts, int channel,
+            Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const;
 
     virtual Float pdf(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             const std::vector<Shape *> &shapes,
-            const Intersection &newIts, int channel) const;
+            const Intersection &newIts, const Spectrum &throughput) const;
 
     MTS_DECLARE_CLASS();
 protected:
@@ -737,13 +692,12 @@ public:
         if (!m_allowIncomingOutgoingDirections)
             Assert(dot(d_out, its.shFrame.n) >= 0);
         // One sample MIS weighting (balance heuristic)
-        int channel = throughputToChannel(throughput);
         Assert(m_weights.size() > 0);
         Assert(m_weights.isNormalized());
         size_t chosenSamplerIdx = m_weights.sample(sampler->next1D());
         Float p = m_weights[chosenSamplerIdx] *
                 m_surfaceSamplers[chosenSamplerIdx]->sample(
-                    its, d_out, scene, getShapes(), newIts, channel, sampler);
+                    its, d_out, scene, getShapes(), newIts, throughput, sampler);
         if (p == 0)
             return 0.0f;
 
@@ -751,7 +705,7 @@ public:
             if (i == chosenSamplerIdx)
                 continue;
             p += m_weights[i] * m_surfaceSamplers[i]->pdf(
-                its, d_out, scene, getShapes(), newIts, channel);
+                its, d_out, scene, getShapes(), newIts, throughput);
         }
         Assert(std::isfinite(p));
         return p;
@@ -763,13 +717,12 @@ public:
         if (!m_allowIncomingOutgoingDirections)
             Assert(dot(d_out, its.shFrame.n) >= 0);
         // One sample MIS weighting (balance heuristic)
-        int channel = throughputToChannel(throughput);
         Assert(m_weights.size() > 0);
         Assert(m_weights.isNormalized());
         Float p = 0;
         for (size_t i = 0; i < m_surfaceSamplers.size(); i++) {
             p += m_weights[i] * m_surfaceSamplers[i]->pdf(
-                its, d_out, scene, getShapes(), newIts, channel);
+                its, d_out, scene, getShapes(), newIts, throughput);
         }
         Assert(std::isfinite(p));
         return p;
@@ -962,17 +915,6 @@ protected:
     }
 
 
-
-    /**
-     * Returns the channel if the throughput is already single-channel,
-     * otherwise returns -1 */
-    static inline int throughputToChannel(const Spectrum &throughput) {
-        int channel = -1;
-        if (throughput.numNonZeroChannels(&channel) != 1)
-            return -1;
-        return channel;
-    }
-
     /**
      * Force single channel throughput if requested, returns the
      * appropriate weight */
@@ -981,12 +923,17 @@ protected:
         if (!m_singleChannel)
             return Spectrum(1.0f);
 
+#if MTS_DSS_SINGLE_CHANNEL_WEIGHTED_SAMPLING
+        int channel = throughput.sampleWeightedChannel(sampler);
+        Float channelWeight = throughput.sumOfAbs();
+#else
         Float channelWeight = 1;
-        int channel = throughputToChannel(throughput);
+        int channel = throughput.getNonZeroChannel()
         if (channel == -1) {
             channelWeight = throughput.numNonZeroChannels();
             channel = throughput.sampleNonZeroChannelUniform(sampler);
         }
+#endif
         Spectrum result(0.0f);
         result[channel] = channelWeight;
         return result;
