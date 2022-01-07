@@ -32,10 +32,16 @@ MTS_NAMESPACE_BEGIN
 
 /* Debugging flag to dump information on which sampling steps are the
  * largest sources of variance. */
-#define MTS_DSS_CHECK_VARIANCE_SOURCES false
+#define MTS_DSS_CHECK_VARIANCE_SOURCES_INFO false
 /* If the flag above is set, then only dump variance information when the
  * sample weight exceeds this threshold. */
 #define MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD 2000
+/* Reject the path if a sampling weight is detected above 
+ * MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD? */
+#define MTS_DSS_CHECK_VARIANCE_SOURCES_REJECT false
+
+#define MTS_DSS_CHECK_VARIANCE_SOURCES (MTS_DSS_CHECK_VARIANCE_SOURCES_INFO || MTS_DSS_CHECK_VARIANCE_SOURCES_REJECT)
+
 /* Support external collimated light sources? This is useful for synthetic
  * 'half-infinite medium, searchlight-type' test scenes, for instance.
  * Set to false when using adaptive integrator, as that is currently broken
@@ -46,7 +52,8 @@ MTS_NAMESPACE_BEGIN
 
 #define WARN_INCONSISTENT_PDFS false /* Warn about inconsistent pdfs? */
 #define WARN_INCONSISTENT_PDFS_THRESHOLD 1e-2 /* Relative error threshold to warn */
-#define REJECT_INCONSISTENT_PDFS false /* Reject sampling with inconsistent pdfs? */
+#define REJECT_INCONSISTENT_PDFS true /* Reject sampling with inconsistent pdfs? */
+#define REJECT_INCONSISTENT_PDFS_WARN false /* Print warning when rejecting? */
 #define REJECT_INCONSISTENT_PDFS_THRESHOLD 1e-1 /* Relative error threshold to reject */
 
 #if WARN_INCONSISTENT_PDFS || REJECT_INCONSISTENT_PDFS
@@ -65,8 +72,9 @@ inline static bool _check_pdf_consistency(const char* location,
         SLog(EWarn, "Warn:   Inconsistent pdfs: %e vs %e, rel %e @ %s",
                 pdf1, pdf2, absRelErr, location);
     } else if (REJECT_INCONSISTENT_PDFS && absRelErr > REJECT_INCONSISTENT_PDFS_THRESHOLD) {
-        SLog(EWarn, "REJECT: Inconsistent pdfs: %e vs %e, rel %e @ %s",
-                pdf1, pdf2, absRelErr, location);
+        if (REJECT_INCONSISTENT_PDFS_WARN)
+            SLog(EWarn, "REJECT: Inconsistent pdfs: %e vs %e, rel %e @ %s",
+                    pdf1, pdf2, absRelErr, location);
         return false; /* Should reject */
     }
     return true;
@@ -1862,14 +1870,18 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
             const Spectrum &bssrdfVal          = indirectSample.bssrdfVal;
             if (thisWeight.maxAbsolute()
                     > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
-                cerr << "indirect internal reflection "
-                        <<thisWeight.maxAbsolute()<<" "<< thisWeight.toString() << endl;
-                checkSourcesOfVariance(scene, channelWeightedThroughput,
-                        its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                        bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
-                checkSourcesOfVariance(scene, channelWeightedThroughput,
-                        its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                        bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, false);
+                if (MTS_DSS_CHECK_VARIANCE_SOURCES_INFO) {
+                    cerr << "indirect internal reflection "
+                            <<thisWeight.maxAbsolute()<<" "<< thisWeight.toString() << endl;
+                    checkSourcesOfVariance(scene, channelWeightedThroughput,
+                            its_out, d_out, its_in, d_in, rec_wi, extraParams,
+                            bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
+                    checkSourcesOfVariance(scene, channelWeightedThroughput,
+                            its_out, d_out, its_in, d_in, rec_wi, extraParams,
+                            bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, false);
+                }
+                if (MTS_DSS_CHECK_VARIANCE_SOURCES_REJECT)
+                    return Spectrum(0.0f);
             }
 #endif
 
@@ -1937,17 +1949,21 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
 #if MTS_DSS_CHECK_VARIANCE_SOURCES
             if (thisWeight.maxAbsolute()
                     > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
-                const Vector &d_in                 = indirectSample.d_in;
-                const EMeasure &bsdfMeasure        = indirectSample.bsdfMeasure;
-                const Spectrum &bsdfValWithCosines = indirectSample.bsdfValWithCosines;
-                const Spectrum &bssrdfVal          = indirectSample.bssrdfVal;
-                cerr << "indirect query "<<thisWeight.maxAbsolute()<<" " << thisWeight.toString() << endl;
-                checkSourcesOfVariance(scene, channelWeightedThroughput,
-                        its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                        bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
-                checkSourcesOfVariance(scene, channelWeightedThroughput,
-                        its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                        bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, false);
+                if (MTS_DSS_CHECK_VARIANCE_SOURCES_INFO) {
+                    const Vector &d_in                 = indirectSample.d_in;
+                    const EMeasure &bsdfMeasure        = indirectSample.bsdfMeasure;
+                    const Spectrum &bsdfValWithCosines = indirectSample.bsdfValWithCosines;
+                    const Spectrum &bssrdfVal          = indirectSample.bssrdfVal;
+                    cerr << "indirect query "<<thisWeight.maxAbsolute()<<" " << thisWeight.toString() << endl;
+                    checkSourcesOfVariance(scene, channelWeightedThroughput,
+                            its_out, d_out, its_in, d_in, rec_wi, extraParams,
+                            bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
+                    checkSourcesOfVariance(scene, channelWeightedThroughput,
+                            its_out, d_out, its_in, d_in, rec_wi, extraParams,
+                            bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, false);
+                }
+                if (MTS_DSS_CHECK_VARIANCE_SOURCES_REJECT)
+                    return Spectrum(0.0f);
             }
 #endif
 
@@ -2112,15 +2128,19 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
                 Spectrum thisWeight = directWeight;
                 if (thisWeight.maxAbsolute()
                         > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
-                    cerr <<"direct samp "<<thisWeight.maxAbsolute()<<" " << thisWeight.toString() << endl;
-                    checkSourcesOfVariance(scene, channelWeightedThroughput,
-                            its_out, d_out, its_in, d_in, rec_wi,
-                            directExtraParams, directBssrdfVal, directBsdfVal,
-                            directBsdfMeasure, sampler, true);
-                    checkSourcesOfVariance(scene, channelWeightedThroughput,
-                            its_out, d_out, its_in, d_in, rec_wi,
-                            directExtraParams, directBssrdfVal, directBsdfVal,
-                            directBsdfMeasure, sampler, false);
+                    if (MTS_DSS_CHECK_VARIANCE_SOURCES_INFO) {
+                        cerr <<"direct samp "<<thisWeight.maxAbsolute()<<" " << thisWeight.toString() << endl;
+                        checkSourcesOfVariance(scene, channelWeightedThroughput,
+                                its_out, d_out, its_in, d_in, rec_wi,
+                                directExtraParams, directBssrdfVal, directBsdfVal,
+                                directBsdfMeasure, sampler, true);
+                        checkSourcesOfVariance(scene, channelWeightedThroughput,
+                                its_out, d_out, its_in, d_in, rec_wi,
+                                directExtraParams, directBssrdfVal, directBsdfVal,
+                                directBsdfMeasure, sampler, false);
+                    }
+                    if (MTS_DSS_CHECK_VARIANCE_SOURCES_REJECT)
+                        continue;
                 }
 #endif
                 // expected value estimator for direct lighting
@@ -2298,13 +2318,17 @@ bool DirectSamplingSubsurface::indirectSample_noSIR(
         Spectrum thisWeight = directWeight;
         if (thisWeight.maxAbsolute()
                 > MTS_DSS_CHECK_VARIANCE_SOURCES_THRESHOLD) {
-            cerr << "direct samp "<<thisWeight.maxAbsolute()<<" " << thisWeight.toString() << endl;
-            checkSourcesOfVariance(scene, channelWeightedThroughput,
-                    its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                    bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
-            checkSourcesOfVariance(scene, channelWeightedThroughput,
-                    its_out, d_out, its_in, d_in, rec_wi, extraParams,
-                    bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, false);
+            if (MTS_DSS_CHECK_VARIANCE_SOURCES_INFO) {
+                cerr << "direct samp "<<thisWeight.maxAbsolute()<<" " << thisWeight.toString() << endl;
+                checkSourcesOfVariance(scene, channelWeightedThroughput,
+                        its_out, d_out, its_in, d_in, rec_wi, extraParams,
+                        bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, true);
+                checkSourcesOfVariance(scene, channelWeightedThroughput,
+                        its_out, d_out, its_in, d_in, rec_wi, extraParams,
+                        bssrdfVal, bsdfValWithCosines, bsdfMeasure, sampler, false);
+            }
+            if (MTS_DSS_CHECK_VARIANCE_SOURCES_REJECT)
+                return false;
         }
 #endif
 
