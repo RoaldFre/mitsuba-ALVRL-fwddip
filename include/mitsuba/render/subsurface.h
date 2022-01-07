@@ -57,7 +57,7 @@ public:
     virtual void cancel();
 
     /// Return the list of shapes associated with this subsurface integrator
-    inline const std::vector<Shape *> getShapes() const { return m_shapes; }
+    inline const std::vector<const Shape *> getShapes() const { return m_shapes; }
 
     /// Get the exitant radiance for a point on the surface
     virtual Spectrum Lo(const Scene *scene, Sampler *sampler,
@@ -93,7 +93,7 @@ protected:
     /// Virtual destructor
     virtual ~Subsurface();
 protected:
-    std::vector<Shape *> m_shapes;
+    std::vector<const Shape *> m_shapes;
     bool m_active;
 };
 

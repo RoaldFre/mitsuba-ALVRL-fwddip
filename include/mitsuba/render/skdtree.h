@@ -142,7 +142,7 @@ public:
      */
     void rayIntersectFully(const Ray &ray,
             std::vector<Intersection> &its,
-            const std::vector<Shape *> *shapes = NULL) const;
+            const std::vector<const Shape *> *shapes = NULL) const;
 
     /**
      * \brief Intersect a ray against all primitives stored in the kd-tree
@@ -372,7 +372,7 @@ protected:
 
     FINLINE void intersectFully(const Ray &ray, IndexType idx,
             Float mint, Float maxt, std::vector<Intersection> &its,
-            const std::vector<Shape *> *shapes = NULL) const {
+            const std::vector<const Shape *> *shapes = NULL) const {
         /* Going through existing cache routines. Compiler is sufficiently
          * smart to optimize that all away, hopefully. */
         IntersectionCache cache;

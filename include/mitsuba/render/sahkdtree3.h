@@ -501,7 +501,7 @@ protected:
 
     FINLINE void rayIntersectFully(const Ray &ray,
             Float mint_, Float maxt_, std::vector<Intersection> &its,
-            const std::vector<Shape *> *shapes = NULL) const {
+            const std::vector<const Shape *> *shapes = NULL) const {
         KDStackEntry stack[MTS_KD_MAXDEPTH];
         int stackPos = 0;
         Float mint = mint_, maxt = maxt_;

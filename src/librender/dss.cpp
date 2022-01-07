@@ -710,7 +710,7 @@ Float WeightIntersectionSampler::pdf(
 
 Float UniformSurfaceSampler::sample(const Intersection &its,
         const Vector &d_out, const Scene *scene,
-        const std::vector<Shape *> &shapes,
+        const std::vector<const Shape *> &shapes,
         Intersection &newIts, const Spectrum &throughput,
         Sampler *sampler) const {
     size_t N = shapes.size();
@@ -739,7 +739,7 @@ Float UniformSurfaceSampler::sample(const Intersection &its,
 
 Float UniformSurfaceSampler::pdf(const Intersection &its,
         const Vector &d_out, const Scene *scene,
-        const std::vector<Shape *> &shapes,
+        const std::vector<const Shape *> &shapes,
         const Intersection &newIts, const Spectrum &throughput) const {
     Float SA = 0;
     for (auto shape : shapes) {
@@ -751,7 +751,7 @@ Float UniformSurfaceSampler::pdf(const Intersection &its,
 
 Float BRDFDeltaSurfaceSampler::sample(const Intersection &its,
         const Vector &d_out, const Scene *scene,
-        const std::vector<Shape *> &shapes,
+        const std::vector<const Shape *> &shapes,
         Intersection &newIts, const Spectrum &throughput,
         Sampler *sampler) const {
     newIts = its;
@@ -760,7 +760,7 @@ Float BRDFDeltaSurfaceSampler::sample(const Intersection &its,
 
 Float BRDFDeltaSurfaceSampler::pdf(const Intersection &its,
         const Vector &d_out, const Scene *scene,
-        const std::vector<Shape *> &shapes,
+        const std::vector<const Shape *> &shapes,
         const Intersection &newIts, const Spectrum &throughput) const {
     if (distance(newIts.p, its.p) <= Epsilon*Vector(its.p).length())
         return 1.0f;
@@ -783,7 +783,7 @@ void ProjSurfaceSampler::getProjFrame(
 }
 
 static void getExtremalPlaneValues(const Vector &u, const Vector &v,
-        const std::vector<Shape *> &shapes, const Point &p,
+        const std::vector<const Shape *> &shapes, const Point &p,
         Vector2 &xLo, Vector2 &xHi) {
     AABB aabb;
     for (const Shape *shape : shapes) {
@@ -810,7 +810,7 @@ static void getExtremalPlaneValues(const Vector &u, const Vector &v,
 
 Float ProjSurfaceSampler::sample(const Intersection &its,
         const Vector &d_out, const Scene *scene,
-        const std::vector<Shape *> &shapes,
+        const std::vector<const Shape *> &shapes,
         Intersection &newIts, const Spectrum &throughput,
         Sampler *sampler) const {
     /* Sample from the throughput-weighted sum of the pdfs associated with
@@ -918,7 +918,7 @@ Float ProjSurfaceSampler::sample(const Intersection &its,
 
 Float ProjSurfaceSampler::pdf(const Intersection &its,
         const Vector &d_out, const Scene *scene,
-        const std::vector<Shape *> &shapes,
+        const std::vector<const Shape *> &shapes,
         const Intersection &newIts, const Spectrum &throughput) const {
     Vector u, v, projectionDir;
     getProjFrame(u, v, projectionDir, its, d_out);
@@ -952,7 +952,6 @@ Float ProjSurfaceSampler::pdf(const Intersection &its,
         SLog(EWarn, "Something fishy happened");
         return 0.0f;
     }
-    std::vector<Intersection> intersections;
     /* We should be able to choose the origin of our intersection
      * collection at the surface instead of where we would have started
      * from during the sampling step (point 'o'): */

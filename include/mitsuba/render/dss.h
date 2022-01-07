@@ -181,7 +181,7 @@ public:
 
     Float sample(Intersection &newIts,
             const Scene *scene, const Point &origin, const Vector &direction,
-            Float time, const std::vector<Shape *> &shapes,
+            Float time, const std::vector<const Shape *> &shapes,
             const Intersection &its_out, const Vector &d_out,
             const Spectrum &throughput, Sampler *sampler, bool bidirectional = true) const {
         const std::vector<Intersection> intersections =
@@ -194,7 +194,7 @@ public:
 
     Float pdf(const Intersection &newIts,
             const Scene *scene, const Point &origin, const Vector &direction,
-            Float time, const std::vector<Shape *> &shapes,
+            Float time, const std::vector<const Shape *> &shapes,
             const Intersection &its_out, const Vector &d_out,
             const Spectrum &throughput, bool bidirectional = true) const {
         const std::vector<Intersection> intersections =
@@ -209,7 +209,7 @@ public:
 
     std::vector<Intersection> collectIntersections(const Scene *scene,
             const Point &origin, const Vector &direction, Float time,
-            const std::vector<Shape *> &shapes, const Intersection &its_out,
+            const std::vector<const Shape *> &shapes, const Intersection &its_out,
             bool bidirectional = true) const {
         std::vector<Intersection> intersections;
 
@@ -554,12 +554,12 @@ class MTS_EXPORT_RENDER SurfaceSampler : public Object {
 public:
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const = 0;
     virtual Float pdf(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             const Intersection &newIts, const Spectrum &throughput) const = 0;
 
     MTS_DECLARE_CLASS();
@@ -573,12 +573,12 @@ public:
     UniformSurfaceSampler() { }
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const;
     virtual Float pdf(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             const Intersection &newIts, const Spectrum &throughput) const;
 
     MTS_DECLARE_CLASS();
@@ -594,12 +594,12 @@ public:
     BRDFDeltaSurfaceSampler() { }
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const;
     virtual Float pdf(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             const Intersection &newIts, const Spectrum &throughput) const;
 
     MTS_DECLARE_CLASS();
@@ -621,13 +621,13 @@ public:
 
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const;
 
     virtual Float pdf(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             const Intersection &newIts, const Spectrum &throughput) const;
 
     MTS_DECLARE_CLASS();
@@ -646,6 +646,55 @@ protected:
 
     const DSSProjFrame m_projFrame;
 };
+
+inline bool hasInternalOverlappingGeometry(
+        const Intersection &its_out,
+        const Intersection &its_in,
+        const Scene *scene) {
+
+    Point p_in(its_in.p);
+    Point p_out(its_out.p);
+    if ((p_in - p_out).length() == 0)
+        return false;
+
+    Vector dir = normalize(p_out - p_in);
+    RayDifferential ray(p_in, dir, its_out.time);
+    ray.mint = -1.0/0.0;
+    ray.maxt =  1.0/0.0;
+
+    SAssert(its_in.shape == its_out.shape);
+    std::vector<const Shape *> shapeSingletonVec;// = {its_out.shape};
+    shapeSingletonVec.push_back(its_out.shape);
+    std::vector<Intersection> itss;
+    scene->rayIntersectFully(ray, itss, &shapeSingletonVec);
+    if (itss.size() < 2) {
+        SLog(EDebug, "Expected to find at least 2 intersections, "
+                "but found %d", itss.size());
+        //return false;
+        return true; // force a reject just in case
+    }
+
+    std::sort(itss.begin(), itss.end(),
+            [](Intersection a, Intersection b) { return a.t < b.t; });
+
+    int expectedSign = -1; // we expect the first normal to be pointed opposite the direction
+    for (auto its : itss) {
+        SAssert(its.shape == its_out.shape);
+        Float theCos = dot(dir, its.geoFrame.n);
+        /* Compare sign wrt expected sign, no error on 'zero' sign (|cos|<Epsilon) */
+        int thisSign = (math::abs(theCos) < Epsilon ? 0 : math::signum(theCos));
+        if (thisSign * expectedSign == -1) {
+            SLog(EDebug, "Found internally overlapping geometry! "
+                    "Current cosine: %f, num its %d\nits_out.t %f (cos %f); itss t values:",
+                    theCos, itss.size(), its_out.t, dot(dir,its_out.geoFrame.n));
+            for (auto its2 : itss)
+                SLog(EDebug, "%f, cos %f", its2.t, dot(dir,its2.geoFrame.n));
+            return true;
+        }
+        expectedSign *= -1;
+    }
+    return false;
+}
 
 
 /**
@@ -701,6 +750,9 @@ public:
         if (p == 0)
             return 0.0f;
 
+        if (hasInternalOverlappingGeometry(its, newIts, scene))
+            return 0.0f;
+
         for (size_t i = 0; i < m_surfaceSamplers.size(); i++) {
             if (i == chosenSamplerIdx)
                 continue;
@@ -719,6 +771,8 @@ public:
         // One sample MIS weighting (balance heuristic)
         Assert(m_weights.size() > 0);
         Assert(m_weights.isNormalized());
+        Assert(!hasInternalOverlappingGeometry(its, newIts, scene));
+
         Float p = 0;
         for (size_t i = 0; i < m_surfaceSamplers.size(); i++) {
             p += m_weights[i] * m_surfaceSamplers[i]->pdf(

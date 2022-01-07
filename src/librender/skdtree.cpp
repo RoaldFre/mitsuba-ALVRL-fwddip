@@ -138,7 +138,7 @@ bool ShapeKDTree::rayIntersect(const Ray &ray, Intersection &its) const {
 
 void ShapeKDTree::rayIntersectFully(const Ray &ray,
             std::vector<Intersection> &its,
-            const std::vector<Shape *> *shapes) const {
+            const std::vector<const Shape *> *shapes) const {
     Float mint, maxt;
 
     #if defined(MTS_FP_DEBUG_STRICT)

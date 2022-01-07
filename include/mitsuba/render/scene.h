@@ -264,14 +264,14 @@ public:
      */
     inline void rayIntersectFully(const Ray &ray,
             std::vector<Intersection> &its,
-            const std::vector<Shape *> *shapes = NULL) const {
+            const std::vector<const Shape *> *shapes = NULL) const {
         m_kdtree->rayIntersectFully(ray, its, shapes);
     }
 
     inline void collectIntersections(Point o, Vector d, Float time,
             Float maxDistance,
             std::vector<Intersection> &intersections,
-            const std::vector<Shape*> *shapes = NULL) const {
+            const std::vector<const Shape*> *shapes = NULL) const {
         Float inf = std::numeric_limits<Float>::infinity();
         if (maxDistance > 0)
             rayIntersectFully(Ray(o,d,Epsilon,maxDistance,time), intersections, shapes);
@@ -282,7 +282,7 @@ public:
     inline void collectIntersectionsBidir(Point o, Vector d, Float time,
             Float maxDistance,
             std::vector<Intersection> &intersections,
-            const std::vector<Shape*> *shapes = NULL) const {
+            const std::vector<const Shape*> *shapes = NULL) const {
         Float inf = std::numeric_limits<Float>::infinity();
         if (maxDistance > 0)
             rayIntersectFully(Ray(o,d,-maxDistance,maxDistance,time), intersections, shapes);

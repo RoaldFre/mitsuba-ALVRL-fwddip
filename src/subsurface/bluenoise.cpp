@@ -62,7 +62,7 @@ struct Cell {
         : firstIndex(firstIndex), sample(sample) { }
 };
 
-void blueNoisePointSet(const Scene *scene, const std::vector<Shape *> &shapes,
+void blueNoisePointSet(const Scene *scene, const std::vector<const Shape *> &shapes,
         Float radius, PositionSampleVector *target, Float &sa, AABB &aabb,
         const void *data) {
     int kmax = 8; /* Perform 8 trial runs */
@@ -122,7 +122,7 @@ void blueNoisePointSet(const Scene *scene, const std::vector<Shape *> &shapes,
         Random *random = t_rng[tid].get();
         Point2 sample(random->nextFloat(), random->nextFloat());
         int shapeIndex = (int) areaDistr.sampleReuse(sample.x);
-        Shape *shape = shapes[shapeIndex];
+        const Shape *shape = shapes[shapeIndex];
 
         PositionSamplingRecord pRec(0);
         shape->samplePosition(pRec, sample);

@@ -345,7 +345,7 @@ public:
 
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const {
         Vector rayDir;
@@ -395,7 +395,7 @@ public:
 
     inline Float sampleDir(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes, const Spectrum &throughput,
+            const std::vector<const Shape *> &shapes, const Spectrum &throughput,
             Sampler *sampler, Vector &rayDir) const {
         /* MIS combo of marginalized and depthSensing, but if 
          * depthSensing fails, then 100% marginalized */
@@ -471,7 +471,7 @@ public:
      * Returns false if we couldn't sample or compute pdf. */
     inline bool sampleWithSensing(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes, const Spectrum &throughput,
+            const std::vector<const Shape *> &shapes, const Spectrum &throughput,
             Sampler *sampler, Vector &rayDir, Float &dirPdf) const {
 
         const Float perturbedWeight = 0.5;
@@ -561,7 +561,7 @@ public:
      * to reweight MIS based on those perturbations that don't fail...)*/
     inline bool sampleWithSensing_perturbed(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes, const Spectrum &throughput,
+            const std::vector<const Shape *> &shapes, const Spectrum &throughput,
             Sampler *sampler, Vector &rayDir, Float &dirPdf) const {
         const Float perturbSize = 0.1;
         const std::vector<Vector> perturbs = {
@@ -606,7 +606,7 @@ public:
      *  Returns false if we couldn't sample or compute pdf. */
     inline bool sampleWithSensing_internal(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             const Spectrum &throughput, Sampler *sampler,
             Vector &rayDir, Float &dirPdf,
             const Vector *sensePerturb = NULL) const {
@@ -676,7 +676,7 @@ public:
 
     virtual Float pdf(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes,
+            const std::vector<const Shape *> &shapes,
             const Intersection &newIts, const Spectrum &throughput) const {
         Point startPoint = getStartPoint(its, d_out);
         Vector rayDirUnnorm = newIts.p - startPoint;
@@ -720,7 +720,7 @@ public:
 
     inline Float pdfDir(const Intersection &its,
             const Vector &d_out, const Scene *scene,
-            const std::vector<Shape *> &shapes, const Spectrum &throughput,
+            const std::vector<const Shape *> &shapes, const Spectrum &throughput,
             const Vector &rayDir) const {
         // MIS combo between marginalized and 'sensing' for direction sampling
         Float dirPdf;
