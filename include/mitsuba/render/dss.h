@@ -232,8 +232,8 @@ public:
         Float min_t = (bidirectional ? -proj - tmp : Epsilon);
 
         Float maxDist = m_itsDistanceCutoff * (1+Epsilon);
-        Assert(distance(its_out.p, origin + direction * max_t) <= maxDist);
-        Assert(distance(its_out.p, origin + direction * min_t) <= maxDist);
+        AssertWarn(distance(its_out.p, origin + direction * max_t) <= maxDist);
+        AssertWarn(distance(its_out.p, origin + direction * min_t) <= maxDist);
 
         scene->rayIntersectFully(Ray(origin,direction,min_t,max_t,time),
                 intersections, &shapes);
