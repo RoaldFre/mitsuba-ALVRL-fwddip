@@ -629,7 +629,7 @@ public:
 
         Float qMax = forced ? FORCED_MAX_PROB : 1.0f;
         Float q = std::min(qMax,
-                throughput.max() * eta*eta / targetLowerThroughput);
+                throughput.maxAbsolute() * eta*eta / targetLowerThroughput);
         if (q < 1.0f && sampler->next1D() >= q)
                 return 0.0f;
         return q;
@@ -666,7 +666,7 @@ public:
         SAssert(throughput.isFinite());
 
         int numSplitsNow = 0;
-        Float peak = throughput.max() * eta * eta;
+        Float peak = throughput.maxAbsolute() * eta * eta;
         if (peak > targetUpperThroughput) {
             Float numIdealSplitsFlt = 0.5f + peak / targetUpperThroughput;
             /* /2 to leave some for a possible next recursion step: */
