@@ -993,6 +993,7 @@ protected:
         return result;
     }
 
+	void clampWeight(Spectrum &weight) const;
 
 
     /**
@@ -1182,6 +1183,7 @@ protected:
             Spectrum check_bssrdfVal,
             Spectrum check_bsdfVal,
             EMeasure check_bsdfMeasure,
+            Float maxAbsoluteWeight,
             Sampler *sampler,
             bool absify) const;
 
@@ -1208,6 +1210,7 @@ protected:
     int m_minInternalReflections; /// Minimum number of subsequent internal reflections (<0 for unbounded), mostly useful for debugging
     Float m_internalReflectionWeight; /// Extra weighting factor for internal reflections, mostly for debugging purposes
     bool m_noRecursiveSubsurf; /// For debug: don't include subsurf Li in recursive query
+    Float m_clampWeight; /// If positive: clamp the bssrdf's Monte Carlo weight to this maximum
     ref_vector<const SurfaceSampler> m_surfaceSamplers;
     DiscreteDistribution m_weights;
     /* itsDistanceCutoff is not actually used at this level, but it's added
