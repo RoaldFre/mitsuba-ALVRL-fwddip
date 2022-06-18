@@ -296,6 +296,9 @@ public:
             Log(EInfo, "Unserializing DipMod %d",i);
             m_dipoles[i] = new DipMod(stream, manager);
         }
+
+        m_dirHemiWeight = stream->readFloat();
+
         configure();
     }
 
@@ -309,6 +312,8 @@ public:
         for (size_t i = 0; i < m_dipoles.size(); i++) {
             m_dipoles[i]->serialize(stream, manager);
         }
+
+        stream->writeFloat(m_dirHemiWeight);
     }
 
     /** 
@@ -467,6 +472,8 @@ public:
             Intersection &its_in,        Vector       &d_in,
             const void *extraParams, const Spectrum &throughput,
             Sampler *sampler) const {
+        Assert(m_dirHemiWeight >= 0 && m_dirHemiWeight <= 1);
+
         Float pdfHemi, pdfImp;
         if (m_dirHemiWeight == 1 || sampler->next1D() < m_dirHemiWeight) {
             // Default implementation does cosine hemisphere sampling
@@ -505,6 +512,8 @@ public:
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector &d_in,
             const void *extraParams, const Spectrum &throughput) const {
+        Assert(m_dirHemiWeight >= 0 && m_dirHemiWeight <= 1);
+
 #if !MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
         Assert(-dot(d_in, its_in.shFrame.n) >= 0);
 #endif
