@@ -158,7 +158,7 @@ public:
         ref<WeightIntersectionSampler> itsSampler(
                 new WeightIntersectionSampler(distanceWeightWrapper(
                     makeExactDiffusionDipoleDistanceWeight(m_sigmaA, m_sigmaS, m_g, m_eta)),
-                m_itsDistanceCutoff));
+                m_itsDistanceCutoff, m_numItsLayers));
         registerSampler(1, new ProjSurfaceSampler(
                 DSSProjFrame::ENormalNormal,  // normal
                 exactDipoleSampler.get(), itsSampler.get()));

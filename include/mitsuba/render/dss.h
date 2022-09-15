@@ -146,7 +146,7 @@ public:
     }
     void serialize(Stream *stream, InstanceManager *manager) const {
         stream->writeSize(m_sources.size());
-        for (const RadianceSource rs : m_sources)
+        for (const RadianceSource &rs : m_sources)
             rs.serialize(stream);
     }
     const std::vector<RadianceSource> &get() const {
@@ -164,10 +164,20 @@ protected:
 };
 
 
+/// Collect intersections along a ray to importance sample one such intersection.
 class MTS_EXPORT_RENDER IntersectionSampler : public Object {
 public:
-    IntersectionSampler(Float itsDistanceCutoff) :
-        m_itsDistanceCutoff(itsDistanceCutoff) { }
+
+    enum IntersectionCollectionMode {
+        EBidirectional,
+        EBidirectionalWithEpsilon,
+        EUnidirectional,
+        EUnidirectionalWithEpsilon,
+    };
+
+    IntersectionSampler(Float itsDistanceCutoff, int numItsLayers) :
+        m_itsDistanceCutoff(itsDistanceCutoff),
+        m_numItsLayers(numItsLayers) { }
 
     virtual Float sample(const std::vector<Intersection> &intersections,
             Intersection &newIts,
@@ -179,14 +189,77 @@ public:
             const Intersection &its_out, const Vector &d_out,
             const Spectrum &throughput) const = 0;
 
+    std::vector<Intersection> filterIntersections(
+            const std::vector<Intersection> &intersections) const {
+        std::vector<Intersection> filteredIts;
+
+        // Distance cutoff
+        int numPositive = 0;
+        int numNegative = 0;
+        const Intersection *exactlyZeroIts = nullptr;
+        for (const Intersection &its : intersections) {
+            if (math::abs(its.t) > m_itsDistanceCutoff)
+                continue;
+
+            filteredIts.push_back(its);
+            if (its.t > 0)
+                numPositive++;
+            if (its.t < 0)
+                numNegative++;
+            if (its.t == 0) {
+                if (exactlyZeroIts != nullptr)
+                    SLog(EWarn, "Had multiple intersections exactly at t=0");
+                exactlyZeroIts = &its;
+            }
+        }
+
+        if (m_numItsLayers < 0 || (numPositive <= m_numItsLayers && numNegative <= m_numItsLayers))
+            return filteredIts;
+
+        // We have more 'layers' than allowed: partition and cut away the excess
+
+        std::vector<Intersection> newFilteredIts;
+
+        if (exactlyZeroIts) // possibly add t=0 intersection if found
+            newFilteredIts.push_back(*exactlyZeroIts);
+
+        std::vector<Intersection> pos;
+        std::vector<Intersection> neg;
+        for (const Intersection &its : filteredIts) {
+            if (its.t > 0)
+                pos.push_back(its);
+            if (its.t < 0)
+                neg.push_back(its);
+        }
+
+        // partition
+        int posIdx = std::min(numPositive, m_numItsLayers) - 1;
+        if (posIdx >= 0)
+            std::nth_element(pos.begin(), pos.begin()+posIdx, pos.end(),
+                    [](const Intersection &its1, const Intersection &its2) { return its1.t < its2.t; });
+
+        int negIdx = std::min(numNegative, m_numItsLayers) - 1;
+        if (negIdx >= 0)
+            std::nth_element(neg.begin(), neg.begin()+negIdx, neg.end(),
+                    [](const Intersection &its1, const Intersection &its2) { return its1.t > its2.t; });
+
+        // collect the surviving ones
+        for (int i = 0; i <= posIdx; i++)
+            newFilteredIts.push_back(pos[i]);
+        for (int i = 0; i <= negIdx; i++)
+            newFilteredIts.push_back(neg[i]);
+        return newFilteredIts;
+    }
+
     Float sample(Intersection &newIts,
             const Scene *scene, const Point &origin, const Vector &direction,
-            Float time, const std::vector<const Shape *> &shapes,
+            Float time, IntersectionCollectionMode itsCollMode,
+            const std::vector<const Shape *> &shapes,
             const Intersection &its_out, const Vector &d_out,
-            const Spectrum &throughput, Sampler *sampler, bool bidirectional = true) const {
+            const Spectrum &throughput, Sampler *sampler) const {
         const std::vector<Intersection> intersections =
-                collectIntersections(scene, origin, direction, time,
-                        shapes, its_out, bidirectional);
+                collectIntersections(scene, origin, direction, time, itsCollMode,
+                        shapes, its_out);
         if (intersections.size() == 0)
             return 0;
         return sample(intersections, newIts, its_out, d_out, throughput, sampler);
@@ -194,24 +267,39 @@ public:
 
     Float pdf(const Intersection &newIts,
             const Scene *scene, const Point &origin, const Vector &direction,
-            Float time, const std::vector<const Shape *> &shapes,
+            Float time, IntersectionCollectionMode itsCollMode,
+            const std::vector<const Shape *> &shapes,
             const Intersection &its_out, const Vector &d_out,
-            const Spectrum &throughput, bool bidirectional = true) const {
+            const Spectrum &throughput) const {
         const std::vector<Intersection> intersections =
-                collectIntersections(scene, origin, direction, time,
-                        shapes, its_out, bidirectional);
+                collectIntersections(scene, origin, direction, time, itsCollMode,
+                        shapes, its_out);
         if (intersections.size() == 0) {
-            SLog(EWarn, "Could not find any intersection, not even our own!");
+            SLog(EDebug, "Could not find any intersection, not even our own!");
             return 0.0f;
         }
         return pdf(intersections, newIts, its_out, d_out, throughput);
     }
 
-    std::vector<Intersection> collectIntersections(const Scene *scene,
-            const Point &origin, const Vector &direction, Float time,
-            const std::vector<const Shape *> &shapes, const Intersection &its_out,
-            bool bidirectional = true) const {
+    std::vector<Intersection> collectIntersections(
+            const Scene *scene, const Point &origin, const Vector &direction,
+            Float time, IntersectionCollectionMode itsCollMode,
+            const std::vector<const Shape *> &shapes, const Intersection &its_out) const {
         std::vector<Intersection> intersections;
+
+        /* TODO: Do proper filtering with appropriate Epsilon of bidirectional
+         * collection. For now we delegate to two *uni*directional collections
+         * with built-in adaptive Epsilon. */
+        if (itsCollMode == EBidirectionalWithEpsilon) {
+            std::vector<Intersection> itsPos = collectIntersections(
+                    scene, origin, direction, time, EUnidirectionalWithEpsilon, shapes, its_out);
+            std::vector<Intersection> itsNeg = collectIntersections(
+                    scene, origin,-direction, time, EUnidirectionalWithEpsilon, shapes, its_out);
+
+            itsPos.insert(itsPos.end(), itsNeg.begin(), itsNeg.end());
+            return itsPos;
+        }
+
 
         /* Find min and max t values that correspond to the
          * m_itsDistanceCutoff range around the its_out.p query point
@@ -229,15 +317,40 @@ public:
 
         Float tmp = sqrt(tmp2);
         Float max_t = -proj + tmp;
-        Float min_t = (bidirectional ? -proj - tmp : Epsilon);
+        Float min_t;
+        switch (itsCollMode) {
+        case EUnidirectional:
+            min_t = 0;
+            break;
+        case EUnidirectionalWithEpsilon:
+            min_t = Epsilon;
+            break;
+        case EBidirectional:
+            min_t = -proj - tmp;
+            break;
+        case EBidirectionalWithEpsilon:
+            // Should currently have been handled above through 2 unidirectional collections
+            Log(EError, "Internal error");
+            Assert(false);
+            return intersections;
+        default:
+            Log(EError, "Unknown IntersectionCollectionMode");
+            Assert(false);
+            return intersections;
+        }
 
         Float maxDist = m_itsDistanceCutoff * (1+Epsilon);
         AssertWarn(distance(its_out.p, origin + direction * max_t) <= maxDist);
         AssertWarn(distance(its_out.p, origin + direction * min_t) <= maxDist);
 
+        // TODO: Handle special case of m_numItsLayers == 1 with cheaper ordinary first-hit ray
         scene->rayIntersectFully(Ray(origin,direction,min_t,max_t,time),
                 intersections, &shapes);
-        return intersections;
+
+        // TODO: quick inefficient filter of all intersections, can be more
+        // smart during traversal (e.g. to avoid interesecting distant geometry
+        // when we only need the N closest instead of all intersections)
+        return filterIntersections(intersections);
     }
 
     Float getItsDistanceCutoff() const {
@@ -249,12 +362,13 @@ protected:
     MTS_DECLARE_CLASS();
 
     Float m_itsDistanceCutoff;
+    int m_numItsLayers; /// Number of closest intersections to collect (on each side of the origin if bidirectional)
 };
 
 class MTS_EXPORT_RENDER MISIntersectionSampler final : public IntersectionSampler {
 public:
     MISIntersectionSampler(const std::vector<std::pair<Float, const IntersectionSampler*> > &samplers) :
-            IntersectionSampler(0.0f) {
+            IntersectionSampler(0.0f, 0) {
         if (samplers.size() < 1)
             Log(EError, "Trying to construct MISIntersectionSampler without "
                     "any samplers!");
@@ -267,6 +381,11 @@ public:
             m_samplers.push_back(p.second);
             m_itsDistanceCutoff = std::max(m_itsDistanceCutoff,
                     p.second->m_itsDistanceCutoff);
+            if (p.second->m_numItsLayers < 0) {
+                m_numItsLayers = -1;
+            } else if (m_numItsLayers >= 0) {
+                m_numItsLayers = std::max(m_numItsLayers, p.second->m_numItsLayers);
+            }
         }
         if (m_samplers.size() < 1)
             Log(EError, "Trying to construct MISIntersectionSampler without "
@@ -298,8 +417,9 @@ public:
     }
 
     Float pdf(const std::vector<Intersection> &intersections,
-            const Intersection &newIts, const Intersection &its_out,
-            const Vector &d_out, const Spectrum &throughput) const {
+            const Intersection &newIts,
+            const Intersection &its_out, const Vector &d_out,
+            const Spectrum &throughput) const {
         Float thePdf = 0;
         for (size_t j = 0; j < m_weights.size(); j++) {
             Float thisPdf = m_samplers[j]->pdf(
@@ -319,13 +439,17 @@ protected:
 };
 
 /// weight = f(its_in, its_out, d_out, spectralChannel)
-typedef std::function<Float(const Intersection&, const Intersection&, const Vector&, int)> IntersectionWeightFunc;
+typedef std::function<
+        Float(
+            const Intersection& its_in, const Intersection& its_out,
+            const Vector& d_out, int spectralChannel
+        )> IntersectionWeightFunc;
 
 class MTS_EXPORT_RENDER WeightIntersectionSampler final : public IntersectionSampler {
 public:
     WeightIntersectionSampler(IntersectionWeightFunc intersectionWeight,
-            Float itsDistanceCutoff) :
-                IntersectionSampler(itsDistanceCutoff),
+            Float itsDistanceCutoff, int numItsLayers) :
+                IntersectionSampler(itsDistanceCutoff, numItsLayers),
                 m_intersectionWeight(intersectionWeight) { }
     virtual Float sample(const std::vector<Intersection> &intersections,
             Intersection &newIts,
@@ -647,55 +771,6 @@ protected:
     const DSSProjFrame m_projFrame;
 };
 
-inline bool hasInternalOverlappingGeometry(
-        const Intersection &its_out,
-        const Intersection &its_in,
-        const Scene *scene) {
-
-    Point p_in(its_in.p);
-    Point p_out(its_out.p);
-    if ((p_in - p_out).length() == 0)
-        return false;
-
-    Vector dir = normalize(p_out - p_in);
-    RayDifferential ray(p_in, dir, its_out.time);
-    ray.mint = -1.0/0.0;
-    ray.maxt =  1.0/0.0;
-
-    SAssert(its_in.shape == its_out.shape);
-    std::vector<const Shape *> shapeSingletonVec;// = {its_out.shape};
-    shapeSingletonVec.push_back(its_out.shape);
-    std::vector<Intersection> itss;
-    scene->rayIntersectFully(ray, itss, &shapeSingletonVec);
-    if (itss.size() < 2) {
-        SLog(EDebug, "Expected to find at least 2 intersections, "
-                "but found %d", itss.size());
-        //return false;
-        return true; // force a reject just in case
-    }
-
-    std::sort(itss.begin(), itss.end(),
-            [](Intersection a, Intersection b) { return a.t < b.t; });
-
-    int expectedSign = -1; // we expect the first normal to be pointed opposite the direction
-    for (auto its : itss) {
-        SAssert(its.shape == its_out.shape);
-        Float theCos = dot(dir, its.geoFrame.n);
-        /* Compare sign wrt expected sign, no error on 'zero' sign (|cos|<Epsilon) */
-        int thisSign = (math::abs(theCos) < Epsilon ? 0 : math::signum(theCos));
-        if (thisSign * expectedSign == -1) {
-            SLog(EDebug, "Found internally overlapping geometry! "
-                    "Current cosine: %f, num its %d\nits_out.t %f (cos %f); itss t values:",
-                    theCos, itss.size(), its_out.t, dot(dir,its_out.geoFrame.n));
-            for (auto its2 : itss)
-                SLog(EDebug, "%f, cos %f", its2.t, dot(dir,its2.geoFrame.n));
-            return true;
-        }
-        expectedSign *= -1;
-    }
-    return false;
-}
-
 
 /**
  * \brief Subsurface scattering materials that directly sample the incoming
@@ -750,7 +825,7 @@ public:
         if (p == 0)
             return 0.0f;
 
-        if (hasInternalOverlappingGeometry(its, newIts, scene))
+        if (hasInternalGeometryOverlap(its, newIts, scene))
             return 0.0f;
 
         for (size_t i = 0; i < m_surfaceSamplers.size(); i++) {
@@ -771,7 +846,7 @@ public:
         // One sample MIS weighting (balance heuristic)
         Assert(m_weights.size() > 0);
         Assert(m_weights.isNormalized());
-        Assert(!hasInternalOverlappingGeometry(its, newIts, scene));
+        Assert(!hasInternalGeometryOverlap(its, newIts, scene));
 
         Float p = 0;
         for (size_t i = 0; i < m_surfaceSamplers.size(); i++) {
@@ -1170,6 +1245,16 @@ protected:
             Vector &d_out, const Normal &n_out) const;
 
     /**
+     * \brief A very crude and simple detector for overlapping geometry.
+     * This is limited in the sense that it can only detect overlap *along the
+     * line connecting both intersections*. Uses m_internalGeometryOverlapMargin.
+     */
+    bool hasInternalGeometryOverlap(
+            const Intersection &its_out,
+            const Intersection &its_in,
+            const Scene *scene) const;
+
+    /**
      * \brief Debugging function that gives information on which sampling
      * steps are the largest source of variance.
      */
@@ -1211,12 +1296,25 @@ protected:
     Float m_internalReflectionWeight; /// Extra weighting factor for internal reflections, mostly for debugging purposes
     bool m_noRecursiveSubsurf; /// For debug: don't include subsurf Li in recursive query
     Float m_clampWeight; /// If positive: clamp the bssrdf's Monte Carlo weight to this maximum
+    bool m_abortIfBsdfCannotBeRecomputed; /// Recompute bsdf after sampling, abort path if values are inconsistent
     ref_vector<const SurfaceSampler> m_surfaceSamplers;
     DiscreteDistribution m_weights;
-    /* itsDistanceCutoff is not actually used at this level, but it's added
+    /* m_itsDistanceCutoff is not actually used at this level, but it's added
      * here for convenience, because all subclasses will pretty much need
      * this for their IntersectionSamplers. */
     Float m_itsDistanceCutoff;
+    /* m_numItsLayers is not actually used at this level, but it's added
+     * here for convenience, because all subclasses will pretty much need
+     * this for their IntersectionSamplers. */
+    int m_numItsLayers;
+    bool m_onlyCollectClosestIntersections;
+
+    /** Distance beyond direct line segment 'p_in, p_out' for checking internal
+     * geometry overlap along that line. Negative for infinity, zero to disable
+     * internal geometry overlap test. */
+    Float m_internalGeometryOverlapMargin;
+
+    bool m_dumpPaths; /// Dump paths to stderr in mitsuba 'hair' format. Doesn't work with path splitting enabled.
 };
 
 MTS_NAMESPACE_END

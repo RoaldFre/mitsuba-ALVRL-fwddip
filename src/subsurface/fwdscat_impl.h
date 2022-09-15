@@ -172,7 +172,7 @@ FS_INLINE Float FwdScat::evalMonopole(Vector u0, Vector uL, Vector R, Float leng
 
     if (length < 0)
         return 0;
-    
+
     double C, D, E, F;
     calcValues(length, C, D, E, F);
 
@@ -182,8 +182,9 @@ FS_INLINE Float FwdScat::evalMonopole(Vector u0, Vector uL, Vector R, Float leng
     Vector3d H = E*Vector3d(R) - D*Vector3d(uL);
     double lHl = H.length();
     Vector Hnorm = Vector(H / lHl);
-    Float lHlreg = (lHl > 1./MTS_FWDSCAT_DIRECTION_MIN_MU) ?
-            1./MTS_FWDSCAT_DIRECTION_MIN_MU : lHl;
+    Float lHlreg = (lHl > 1./m_direction_min_mu) ?
+            1./m_direction_min_mu : lHl;
+
     Float cosTheta = roundCosThetaForStability(dot(u0, Hnorm), -1, 1);
 
     double N = absorptionAndNormalizationConstant(length);
@@ -1184,7 +1185,7 @@ FS_INLINE Float FwdScat::sampleDirectionBoundaryAwareMonopole_orig(
     Vector Hnorm = Vector(H / lHl);
 
     /* Regularization */
-    lHl = (lHl > 1./MTS_FWDSCAT_DIRECTION_MIN_MU) ? 1./MTS_FWDSCAT_DIRECTION_MIN_MU : lHl;
+    lHl = (lHl > 1./m_direction_min_mu) ? 1./m_direction_min_mu : lHl;
 
     /* If we are badly conditioned: pick coordinates around n0 instead of
      * trying to set up a Hnorm frame. */
@@ -1388,7 +1389,7 @@ FS_INLINE Float FwdScat::pdfDirectionBoundaryAwareMonopole_orig(
     Vector Hnorm = Vector(H / lHl);
 
     /* Regularization */
-    lHl = (lHl > 1./MTS_FWDSCAT_DIRECTION_MIN_MU) ? 1./MTS_FWDSCAT_DIRECTION_MIN_MU : lHl;
+    lHl = (lHl > 1./m_direction_min_mu) ? 1./m_direction_min_mu : lHl;
     bool badlyConditioned = math::abs(dot(n0, Hnorm)) > 1-Epsilon;
 
     Float minCosTheta, maxCosTheta, minPhi, maxPhi;
@@ -1657,9 +1658,9 @@ FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_bis(
     Vector3d H = E*Vector3d(R) - D*Vector3d(uL);
 
     // Regularize |H| if needed
-    if (H.length() > 1./MTS_FWDSCAT_DIRECTION_MIN_MU) {
+    if (H.length() > 1./m_direction_min_mu) {
         // clamp length
-        H *= 1./MTS_FWDSCAT_DIRECTION_MIN_MU / H.length();
+        H *= 1./m_direction_min_mu / H.length();
     }
 
     Vector3d x_unnorm = H - z*dot(z,H);

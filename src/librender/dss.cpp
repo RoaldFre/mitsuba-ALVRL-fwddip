@@ -241,10 +241,19 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     m_clampWeight = props.getFloat(
             "clampWeight", -1.0);
 
+    m_abortIfBsdfCannotBeRecomputed = props.getBoolean(
+            "abortIfBsdfCannotBeRecomputed", false);
+
+    m_dumpPaths = props.getBoolean(
+            "dumpPaths", false);
+
     /* Don't consider incoming surface points that are more absorption
      * lengths away from the outgoing query point than this factor. */
     Float cutoffNumAbsorptionLengths = props.getFloat(
             "cutoffNumAbsorptionLengths", 10);
+
+    m_onlyCollectClosestIntersections = props.getBoolean(
+            "onlyCollectClosestIntersections", false);
 
     if ((m_numSIRsurface > 1 || m_SIRnonSurfaceOversamplingFactor > 1)
             && !(m_directSampling && m_directSamplingMIS)) {
@@ -281,6 +290,10 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     lookupMaterial(props, sigmaS, sigmaA, g, &m_eta); // also sets m_eta
     // TODO: if m_singleChannel: use the exact sigma_a for the current channel!
     m_itsDistanceCutoff = cutoffNumAbsorptionLengths / sigmaA.min();
+    m_numItsLayers = props.getInteger("numItsLayers", -1);
+
+    m_internalGeometryOverlapMargin = props.getFloat(
+            "internalGeometryOverlapAbsorptionLengthMargin", 0) / sigmaA.min();
 }
 
 DirectSamplingSubsurface::DirectSamplingSubsurface(Stream *stream,
@@ -296,10 +309,16 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(Stream *stream,
     m_sourcesIndex = stream->readInt();
     m_sourcesResID = -1;
     m_itsDistanceCutoff = stream->readFloat();
+    m_numItsLayers = stream->readInt();
     m_minInternalReflections = stream->readInt();
     m_maxInternalReflections = stream->readInt();
     m_internalReflectionWeight = stream->readFloat();
     m_noRecursiveSubsurf = stream->readBool();
+    m_clampWeight = stream->readFloat();
+    m_abortIfBsdfCannotBeRecomputed = stream->readBool();
+    m_dumpPaths = stream->readBool();
+    m_onlyCollectClosestIntersections = stream->readBool();
+    m_internalGeometryOverlapMargin = stream->readFloat();
     /* Note: serialize gets called before preprocess, so we can't pass
      * m_nonCollimatedLightSourcesPresent information here. So for safety: */
     m_nonCollimatedLightSourcesPresent = true;
@@ -317,10 +336,16 @@ void DirectSamplingSubsurface::serialize(Stream *stream,
     stream->writeFloat(m_eta);
     stream->writeInt(m_sourcesIndex);
     stream->writeFloat(m_itsDistanceCutoff);
+    stream->writeInt(m_numItsLayers);
     stream->writeInt(m_minInternalReflections);
     stream->writeInt(m_maxInternalReflections);
     stream->writeFloat(m_internalReflectionWeight);
     stream->writeBool(m_noRecursiveSubsurf);
+    stream->writeFloat(m_clampWeight);
+    stream->writeBool(m_abortIfBsdfCannotBeRecomputed);
+    stream->writeBool(m_dumpPaths);
+    stream->writeBool(m_onlyCollectClosestIntersections);
+    stream->writeFloat(m_internalGeometryOverlapMargin);
     /* Note: serialize gets called before preprocess, so we can't pass
      * m_nonCollimatedLightSourcesPresent information here. */
 }
@@ -833,9 +858,15 @@ static void getExtremalPlaneValues(const Vector &u, const Vector &v,
 
     /* Because we only get called when the point p is actually on the
      * surface, we should have only negative xLo values and only positive
-     * xHi values. */
-    SAssertWarn(xLo.x <= 0 && xLo.y <= 0);
-    SAssertWarn(xHi.x >= 0 && xHi.y >= 0);
+     * xHi values. (Allow for some round off error in warning) */
+    Float eps = aabb.getExtents().length() * Epsilon;
+    SAssertWarn(xLo.x <=  eps && xLo.y <=  eps);
+    SAssertWarn(xHi.x >= -eps && xHi.y >= -eps);
+    // Explicitly clamp to handle epsilon round off error
+    xLo.x = std::min(xLo.x, (Float)0.0f);
+    xLo.y = std::min(xLo.y, (Float)0.0f);
+    xHi.x = std::max(xHi.x, (Float)0.0f);
+    xHi.y = std::max(xHi.y, (Float)0.0f);
 }
 
 Float ProjSurfaceSampler::sample(const Intersection &its,
@@ -877,7 +908,7 @@ Float ProjSurfaceSampler::sample(const Intersection &its,
      *         |               | <- geometry
      *         |               |
      *
-     *         ^---------------^--- the side planes here cannot
+     *         ^. . . . . . . .^. . the side planes here cannot
      *                              be sampled
      *
      * This should not be a problem for 'natural/organic' scenes, but
@@ -909,7 +940,7 @@ Float ProjSurfaceSampler::sample(const Intersection &its,
      *        be sampled
      */
     Float intersectionProb = m_itsSampler->sample(newIts, scene,
-            o, projectionDir, its.time,
+            o, projectionDir, its.time, IntersectionSampler::EBidirectional,
             shapes, its, d_out, throughput, sampler);
     if (intersectionProb == 0)
         return 0.0f;
@@ -986,7 +1017,7 @@ Float ProjSurfaceSampler::pdf(const Intersection &its,
      * collection at the surface instead of where we would have started
      * from during the sampling step (point 'o'): */
     Float intersectionProb = m_itsSampler->pdf(newIts, scene,
-            newIts.p, projectionDir, its.time,
+            newIts.p, projectionDir, its.time, IntersectionSampler::EBidirectional,
             shapes, its, d_out, throughput);
     if (intersectionProb == 0)
         return 0.0f;
@@ -1382,6 +1413,125 @@ Spectrum DirectSamplingSubsurface::pdfIndirect(const Scene *scene,
     return pdf_d_in_and_rec_wi * extraParamsPdf;
 }
 
+
+bool DirectSamplingSubsurface::hasInternalGeometryOverlap(
+        const Intersection &its_out,
+        const Intersection &its_in,
+        const Scene *scene) const {
+    if (m_internalGeometryOverlapMargin == 0)
+        return false; // overlap checking is disabled
+
+    Point p_in(its_in.p);
+    Point p_out(its_out.p);
+    Vector nGeo_in = its_in.geoFrame.n;
+    Vector nGeo_out = its_out.geoFrame.n;
+
+    if ((p_in - p_out).length() == 0)
+        return false;
+
+    Vector dir = normalize(p_out - p_in);
+    RayDifferential ray(p_in, dir, its_out.time);
+    int expectedSign; // Expected sign of next normal, 0 to signify that any sign is allowed
+    if (m_internalGeometryOverlapMargin < 0) {
+        // Infinite rays: we expect the very first normal to be pointed opposite the direction
+        expectedSign = -1;
+        ray.mint = -1.0/0.0;
+        ray.maxt =  1.0/0.0;
+    } else {
+        expectedSign = 0;
+        ray.mint = -m_internalGeometryOverlapMargin;
+        ray.maxt = distance(p_in, p_out) + m_internalGeometryOverlapMargin;
+    }
+
+#if 0
+    SAssert(its_in.shape == its_out.shape);
+#else
+    /* TODO currently hard reject for non-identical shapes (this will break
+     * things when mixing and matching shapes with different IOR -- which
+     * requires separate bsdfs and thus separate shapes; e.g. fruit juice
+     * with both an interface with a glass jar and an interface with air) */
+    if (its_in.shape != its_out.shape)
+        return true;
+#endif
+
+    std::vector<const Shape *> shapeSingletonVec;// = {its_out.shape};
+    shapeSingletonVec.push_back(its_out.shape);
+    std::vector<Intersection> itss;
+    scene->rayIntersectFully(ray, itss, &shapeSingletonVec);
+    if (itss.size() < 2) {
+        /* In general we expect to find at least 2 intersections (p_in and p_out),
+         * but in degenerate cases this may differ:
+         *   - One of our intersections barely touches the edge of the geometry
+         *     and numerical rounding errors may prevent that point from being
+         *     discovered again.
+         *   - In the extreme case: the geometry is a perfect plane with
+         *     both p_in and p_out in that plane -- there would actually be
+         *     infinite intersections between p_in and p_out in this case).
+         *     We can check for this case based on the normals. */
+        if (math::abs(dot(dir, nGeo_in)) < Epsilon  ||  math::abs(dot(dir,nGeo_out)) < Epsilon) {
+            return false; // 'planar case', don't reject
+        }
+
+        SLog(EDebug,
+           "Expected to find at least 2 intersections, "
+           "but found %d",
+           itss.size());
+        for (auto its2 : itss)
+            SLog(EDebug, "%f, cos %f", its2.t, dot(dir,its2.geoFrame.n));
+        return false; // don't reject
+    }
+
+    // Helper function: is the intersection with given geo normal and t found in itss?
+    auto itsIsFound = [&](Vector nGeo, Float t, Float distanceThreshold) {
+        Float minDist = 1.0/0.0;
+        for (auto its : itss) {
+            Float thisDist = math::abs(its.t - t);
+            if (its.geoFrame.n == nGeo  &&  thisDist < minDist)
+                minDist = thisDist;
+        }
+        return minDist <= distanceThreshold;
+    };
+
+    // If p_in or p_out was badly conditioned, add them explicitly to the intersections in case they were not found
+    Float eps = Epsilon * distance(p_in, p_out);
+    Float t_in = 0.0f;
+    Float t_out = distance(p_in, p_out);
+    if (math::abs(dot(dir, nGeo_in)) < Epsilon  &&  !itsIsFound(nGeo_in, t_in, eps)) {
+        Intersection its(its_in);
+        its.t = t_in;
+        itss.push_back(its);
+    }
+    if (math::abs(dot(dir, nGeo_out)) < Epsilon  &&  !itsIsFound(nGeo_out, t_out, eps)) {
+        Intersection its(its_out);
+        its.t = t_out;
+        itss.push_back(its);
+    }
+
+    // Sort intersections
+    std::sort(itss.begin(), itss.end(),
+            [](Intersection a, Intersection b) { return a.t < b.t; });
+
+    // Loop over intersections, check that the normal sign keeps alternating
+    for (auto its : itss) {
+        SAssert(its.shape == its_out.shape);
+        Float theCos = dot(dir, its.geoFrame.n);
+        // Compare sign wrt expected sign, no error on 'zero' sign (|cos|<Epsilon)
+        int thisSign = (math::abs(theCos) < Epsilon ? 0 : math::signum(theCos));
+        if (thisSign * expectedSign == -1) {
+            SLog(EWarn, "Found internal geometry overlap! "
+                    "Current cosine: %f, num its %d\n"
+                    "its_in cos %f, its_out cos %f, distance %f, margin %f; itss t values:",
+                    theCos, itss.size(),
+                    dot(dir,its_in.geoFrame.n), dot(dir,its_out.geoFrame.n),
+                    distance(p_in, p_out), m_internalGeometryOverlapMargin);
+            for (auto its2 : itss)
+                SLog(EWarn, "%f, cos %f", its2.t, dot(dir,its2.geoFrame.n));
+            return true;
+        }
+        expectedSign = -thisSign; // Correctly handles thisSign==0: either sign is possible next
+    }
+    return false;
+}
 
 
 
@@ -1818,6 +1968,11 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
 
     Assert(m_maxInternalReflections < 0 || numInternalRefl <= m_maxInternalReflections);
 
+    if (m_dumpPaths) {
+        cerr << std::scientific << std::setprecision(15);
+        cerr << its_out.p.x << " " << its_out.p.y << " " << its_out.p.z << endl;
+    }
+
     const Vector d_out = -d;
     const Normal n_out = its_out.shFrame.n;
 
@@ -2012,6 +2167,12 @@ Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *samp
 #endif
             clampWeight(thisWeight);
 
+            if (m_dumpPaths) {
+                cerr << std::scientific << std::setprecision(15);
+                cerr << its_in.p.x << " " << its_in.p.y << " " << its_in.p.z << endl;
+                cerr << endl;
+            }
+
             // Get the actual indirect contribution from the integrator
             if (m_noRecursiveSubsurf) {
                 // XXX DEBUG TEST (to see if this fixes the fireflies with nontriv (eta!=1) boundary bsdf!!)
@@ -2036,7 +2197,7 @@ DSS_Li_radianceSourceSampling:
     const Point p_out = its_out.p;
     /* Add light sources that cannot be sampled */
     Assert(m_sources.get());
-    for (const RadianceSource rs : m_sources->get()) {
+    for (const RadianceSource &rs : m_sources->get()) {
         // Make fake intersection record
         Intersection its_in;
         its_in.shFrame = Frame(rs.n);
@@ -2081,11 +2242,14 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
     if (!m_nonCollimatedLightSourcesPresent)
         return false;
 
+    // TODO: The final sample can be computed online instead of explicitly saving all samples!
     std::vector<IndirectSamplingRecord> samples;
     size_t totalSIRattempts = m_numSIRsurface * m_SIRnonSurfaceOversamplingFactor;
     samples.reserve(totalSIRattempts);
     size_t parSize = extraParamsSize();
-    char *paramSamples = (parSize == 0 ? NULL : new char[totalSIRattempts * parSize]);
+    std::vector<char> paramVec;
+    paramVec.reserve(totalSIRattempts * parSize);
+    char *paramSamples = (parSize == 0 ? NULL : &paramVec[0]);
     DiscreteDistribution sampleWeights;
     sampleWeights.reserve(totalSIRattempts);
 
@@ -2227,6 +2391,9 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
                  * contribution (because we don't allow light sources within
                  * our medium -- TODO: for now?), so no need to calculate
                  * direct pdf as it will be zero. */
+                Assert(pdfDirect(scene, its_in, its_out,
+                        d_out, channelWeightedThroughput, d_in, rec_wi,
+                        extraPars, bsdfMeasure).isZero());
                 pdfForDirectContrib = indirectPdf;
             } else {
                 Assert(m_directSamplingMIS);
@@ -2279,7 +2446,6 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
     indirectSample.weightForIndirectContrib /= (totalSIRattempts * sampleProb);
     if (paramSamples) {
         memcpy(extraParams, paramSamples + idx*parSize, parSize);
-        delete[] paramSamples;
     }
     return true;
 }

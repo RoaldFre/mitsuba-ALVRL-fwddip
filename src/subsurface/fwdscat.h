@@ -6,19 +6,6 @@
 
 MTS_NAMESPACE_BEGIN
 
-/* This ensures that the pdf calculation from a set of ('numerically
- * rounded') directions doesn't become badly conditioned when compared to
- * the calculation of the pdf during sampling. */
-// WARNING: Single precision has not been tested! Value is just a guess...
-#ifdef SINGLE_PRECISION
-# define MTS_FWDSCAT_DIRECTION_MIN_MU 1e-3
-#else
-# define MTS_FWDSCAT_DIRECTION_MIN_MU 1e-4
-#endif
-
-
-
-
 class MTS_EXPORT FwdScat final : public DipoleModel {
 public:
     FwdScat(Float sigS, Float sigA, Float g, Float eta, const Properties &props) :
@@ -29,10 +16,23 @@ public:
                     "Sensible values are close to 1.");
         }
 
+        m_direction_min_mu = props.getFloat("direction_min_mu", -1);
+        if (m_direction_min_mu == -1) {
+#ifdef SINGLE_PRECISION
+            // WARNING: Single precision has not been tested! Value is just a guess...
+            m_direction_min_mu = 1e-3;
+#else
+            m_direction_min_mu = 1e-4;
+#endif
+        }
+
         m_debug_override_ps = props.getFloat("debug_override_ps", -1);
         m_debug_uniform_ps_min = props.getFloat("debug_uniform_ps_min", -1);
         m_debug_uniform_ps_max = props.getFloat("debug_uniform_ps_max", -1);
         m_debug_requested_hemi_weight = props.getFloat("debug_requested_hemi_weight", -1);
+
+        m_bidirectionalRayDirSurfSampler = props.getBoolean("bidirectionalRayDirSurfSampler", true);
+
         Log(EInfo, "FWDSCAT DEBUG: ps[%f|%f..%f], hemi %f", 
                 m_debug_override_ps,
                 m_debug_uniform_ps_min,
@@ -44,19 +44,25 @@ public:
 
     FwdScat(Stream *stream, InstanceManager *manager) :
             DipoleModel(stream, manager),
-            p(stream->readFloat()),
-            m_debug_override_ps(stream->readFloat()),
-            m_debug_uniform_ps_min(stream->readFloat()),
-            m_debug_uniform_ps_max(stream->readFloat()),
-            m_debug_requested_hemi_weight(stream->readFloat()) { }
+            p(stream->readFloat()) {
+        m_direction_min_mu = stream->readFloat();
+        m_debug_override_ps = stream->readFloat();
+        m_debug_uniform_ps_min = stream->readFloat();
+        m_debug_uniform_ps_max = stream->readFloat();
+        m_debug_requested_hemi_weight = stream->readFloat();
+        m_bidirectionalRayDirSurfSampler = stream->readBool();
+        Log(EInfo, "unser FwdScat: %s", toString().c_str());
+    }
 
     void serialize(Stream *stream, InstanceManager *manager) const {
         DipoleModel::serialize(stream, manager);
         stream->writeFloat(p);
+        stream->writeFloat(m_direction_min_mu);
         stream->writeFloat(m_debug_override_ps);
         stream->writeFloat(m_debug_uniform_ps_min);
         stream->writeFloat(m_debug_uniform_ps_max);
         stream->writeFloat(m_debug_requested_hemi_weight);
+        stream->writeBool(m_bidirectionalRayDirSurfSampler);
     }
 
     std::string toString() const {
@@ -64,7 +70,9 @@ public:
         oss << "FwdScat[sigma_s="<<m_sigS
                 <<", sigma_a="<<m_sigA
                 <<", p="<<p
+                <<", minMu="<<m_direction_min_mu
                 <<", eta="<<m_eta
+                <<", bidirRayDirSurfSamp="<<m_bidirectionalRayDirSurfSampler
                 <<"]";
         return oss.str();
     }
@@ -189,12 +197,29 @@ protected:
 
     const Float p;  /// Inverse length scale of forward scattering model
 
+    /**
+     * Lower limit on the effective 'mu' of the directional part.
+     * This ensures that the pdf calculation from a set of ('numerically
+     * rounded') directions doesn't become badly conditioned when compared to
+     * the calculation of the pdf during sampling.
+     */
+    float m_direction_min_mu;
+
     Float m_debug_override_ps;
     Float m_debug_uniform_ps_min;
     Float m_debug_uniform_ps_max;
     Float m_debug_requested_hemi_weight;
 
     MTS_DECLARE_CLASS();
+
+    /* Not really needed at this level, but added here so we can query it
+     * easily when wrapping this in a DipoleModel to set up the surface
+     * samplers. Quick and dirty, not very clean. */
+    bool m_bidirectionalRayDirSurfSampler;
+public:
+    bool useBidirectionalrayDirSurfSampler() const {
+        return m_bidirectionalRayDirSurfSampler;
+    }
 };
 
 MTS_NAMESPACE_END

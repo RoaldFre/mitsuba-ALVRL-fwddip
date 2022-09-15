@@ -339,9 +339,9 @@ inline IntersectionWeightFunc fwdDipSmallLengthWeightFunc(
 class MTS_EXPORT_RENDER RayDirectionSurfaceSampler final : public SurfaceSampler {
 public:
     RayDirectionSurfaceSampler(const Spectrum &sigmaTr, const Spectrum &p,
-            Float retreatFactor, const IntersectionSampler *itsSampler)
+            Float retreatFactor, bool bidirectional, const IntersectionSampler *itsSampler)
             : m_sigmaTr(sigmaTr), m_p(p), m_retreatFactor(retreatFactor),
-              m_itsSampler(itsSampler) { }
+              m_bidirectional(bidirectional), m_itsSampler(itsSampler) { }
 
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
@@ -353,9 +353,12 @@ public:
 
         // Intersection prob
         Point startPoint = getStartPoint(its, d_out);
+        IntersectionSampler::IntersectionCollectionMode itsCollMode = m_bidirectional
+                ? IntersectionSampler::EBidirectionalWithEpsilon
+                : IntersectionSampler::EUnidirectionalWithEpsilon;
         Float intersectionProb = m_itsSampler->sample(newIts, scene,
-                startPoint, rayDir, its.time,
-                shapes, its, d_out, throughput, sampler, false);
+                startPoint, rayDir, its.time, itsCollMode,
+                shapes, its, d_out, throughput, sampler);
         if (intersectionProb == 0)
             return 0.0f;
 
@@ -701,9 +704,12 @@ public:
         Float dirPdf = pdfDir(its, d_out, scene, shapes, throughput, rayDir);
 
         // Intersection prob
+        IntersectionSampler::IntersectionCollectionMode itsCollMode = m_bidirectional
+                ? IntersectionSampler::EBidirectionalWithEpsilon
+                : IntersectionSampler::EUnidirectionalWithEpsilon;
         Float intersectionProb = m_itsSampler->pdf(newIts, scene,
-                startPoint, rayDir, its.time,
-                shapes, its, d_out, throughput, false);
+                startPoint, rayDir, its.time, itsCollMode,
+                shapes, its, d_out, throughput);
         if (intersectionProb == 0)
             return 0.0f;
 
@@ -773,6 +779,7 @@ protected:
 
     /// In fractions of the (channel-wise minimal) reduced scattering length
     const Float m_retreatFactor;
+    const bool m_bidirectional;
 
     /** When sampling with 'depth sensing': scale the VMF kappa by this 
      * amount (<1 to widen peak) */
@@ -982,23 +989,23 @@ void FwdDip::configure() {
                 new WeightIntersectionSampler(distanceWeightWrapper(
                         makeExactDiffusionDipoleDistanceWeight(
                         m_sigmaA, m_sigmaS, m_g, m_eta)),
-                m_itsDistanceCutoff);
+                m_itsDistanceCutoff, m_numItsLayers);
 
         ref<IntersectionSampler> itsSamplerEffectiveExtinction =
                 new WeightIntersectionSampler(distanceWeightWrapper(
                         makeExponentialDistanceWeight(sigmaTr)),
-                m_itsDistanceCutoff);
+                m_itsDistanceCutoff, m_numItsLayers);
 
         ref<IntersectionSampler> itsSamplerFwdDipSmallLenR2 =
                 new WeightIntersectionSampler(
                         fwdDipSmallLengthWeightFunc(
                             m_sigmaS, m_sigmaA, m_g, false),
-                m_itsDistanceCutoff);
+                m_itsDistanceCutoff, m_numItsLayers);
         ref<IntersectionSampler> itsSamplerFwdDipSmallLenR3 =
                 new WeightIntersectionSampler(
                         fwdDipSmallLengthWeightFunc(
                             m_sigmaS, m_sigmaA, m_g, true),
-                m_itsDistanceCutoff);
+                m_itsDistanceCutoff, m_numItsLayers);
 
         std::vector<std::pair<Float, const IntersectionSampler*> > is;
         is.push_back(std::make_pair(0.1, itsSamplerEffectiveExtinction.get()));
@@ -1063,7 +1070,8 @@ void FwdDip::configure() {
 # endif
 
 # if 1
-        registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, 0, itsSampler));
+        bool bidirectional = m_dipoles[0]->useBidirectionalrayDirSurfSampler(); // quick and dirty, not the best place to store this
+        registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, 0, bidirectional, itsSampler));
         //registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, ShadowEpsilon, itsSampler));
 # endif
 #endif /* MTS_FWDDIP_DEBUG_USE_SIMPLE_JENSEN_SURFACE_SAMPLER*/
