@@ -53,7 +53,7 @@ namespace warp {
 
     /// Density of \ref squareToCosineHemisphere() with respect to solid angles
     extern MTS_EXPORT_CORE inline Float squareToCosineHemispherePdf(const Vector &d) {
-        if (Frame::cosTheta <= 0)
+        if (Frame::cosTheta(d) <= 0)
             return 0;
         return INV_PI * Frame::cosTheta(d);
     }
