@@ -186,24 +186,39 @@ Float intervalToNonuniformTent(Float a, Float b, Float c, Float sample) {
 
 static void uniformToTruncatedExponentialImpl(Float original_lambda,
         Float original_lo, Float original_hi, const Float *u_, Float &original_x, Float *pdf) {
+    SAssert(original_lo <= original_hi);
     Float u, x;
     if (u_) {
         u = *u_;
         SAssert(u >= 0 && u <= 1);
     } else {
         u = 0.0f/0.0f;
+
+        // Check if provided value lies within bounds (allow for small epsilon due to numerical roundoff issues), otherwise it's an immediate zero pdf
+        Float bounds_epsilon = (original_hi - original_lo) * Epsilon;
+        if ( !(original_x >= original_lo - bounds_epsilon)
+          || !(original_x <= original_hi + bounds_epsilon)) {
+            if (pdf)
+                *pdf = 0; // received value outside of valid range
+            return;
+        } else {
+            // Clamp to catch minor roundoff problems
+            original_x = math::clamp(original_x, original_lo, original_hi);
+        }
     }
-    Float thePdf, lambda, lo, hi;
-    if (original_lambda > 0) {
+    Float thePdf, lambda, lo, hi, sign;
+    if (original_lambda >= 0) {
         lambda = original_lambda;
         lo = original_lo;
         hi = original_hi;
         x = original_x;
+        sign = 1;
     } else {
         lambda = -original_lambda; // make it positive
         lo = -original_hi;
         hi = -original_lo;
         x = -original_x;
+        sign = -1;
     }
 
     if ((hi - lo)*lambda < Epsilon) {
@@ -237,37 +252,41 @@ static void uniformToTruncatedExponentialImpl(Float original_lambda,
                 /* *INSANELY* unlikely (pdf below would probably cut off to
                  * zero anyway, but universe would die of heat death first) */
                 SLog(EWarn, "Woah! Universe should have encountered heat death, "
-                        "or code is bugged -- x: %f < lo %f", x, lo);
+                        "or code is bugged -- x: %e < lo %e", x, lo);
                 x = lo;
             }
         }
         thePdf = lambda * exp(lambda*(x - hi));
         if (!std::isfinite(thePdf) || thePdf < 0 || (u_ && thePdf <= 0))
-            SLog(EWarn, "Something fishy happened, pdf %f, x: %f (min %f max %f lambda %f)", thePdf, x, lo, hi, lambda);
+            SLog(EWarn, "Something fishy happened, pdf %e, x: %e (min %e max %e lambda %e)", thePdf, x, lo, hi, lambda);
     } else {
         if (u_) {
             x = math::clamp(std::log((1.f-u)*math::fastexp(lo*lambda) + u*math::fastexp(hi*lambda)) / lambda,
                     lo, hi);
+            if (!std::isfinite(x)) {
+                SLog(EWarn, "Something fishy happened, x: %e (min %e max %e lambda %e)", x, lo, hi, lambda);
+            }
         }
         thePdf = lambda/(exp(hi*lambda) - exp(lo*lambda)) * exp(lambda * x);
     }
 
-    if (thePdf < 0) {
-        SLog(EWarn, "Got negative pdf! %e", thePdf);
+    if (!(thePdf >= 0)) { // nan-aware
+        SLog(EWarn, "Got problematic pdf! %e", thePdf);
         thePdf = 0;
     }
     if (pdf)
         *pdf = thePdf;
 
-    if (u_) {
-        if (original_lambda < 0)
-            original_x = -x;
-        else
-            original_x = x;
-    }
+    if (u_)
+        original_x = x * sign;
 
-    SAssert(original_lo <= original_x);
-    SAssert(original_x <= original_hi);
+    Float check_epsilon = (original_hi - original_lo) * Epsilon;
+    if ( !(original_x >= original_lo - check_epsilon)
+      || !(original_x <= original_hi + check_epsilon)) {
+        SLog(EWarn, "Boundary issue (called for pdf: %d): orig_lo %e, orig_x %e, orig_hi %e ; pdf %e, x: %e (min %e max %e lambda %e)",
+                u_ == nullptr, original_lo, original_x, original_hi, thePdf, x, lo, hi, lambda);
+        SAssert(false);
+    }
 }
 
 Float uniformToTruncatedExponential(Float lambda,
