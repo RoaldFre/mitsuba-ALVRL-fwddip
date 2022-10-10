@@ -196,6 +196,9 @@ public:
         m_noExternalReflection = props.getBoolean("noExternalReflection", false);
         m_noInternalReflection = props.getBoolean("noInternalReflection", false);
         m_noTransmission = props.getBoolean("noTransmission", false);
+        m_disableEtaScaling = props.getBoolean("disableEtaScaling", false);
+        if (m_disableEtaScaling)
+            Log(EWarn, "Eta scaling is disabled, this will give incorrect results with bidirectional methods!");
 
         /* Specifies the internal index of refraction at the interface */
         Float intIOR = lookupIOR(props, "intIOR", "bk7");
@@ -232,6 +235,7 @@ public:
         m_noExternalReflection = stream->readBool();
         m_noInternalReflection = stream->readBool();
         m_noTransmission = stream->readBool();
+        m_disableEtaScaling = stream->readBool();
         m_eta = stream->readFloat();
         m_invEta = 1 / m_eta;
 
@@ -250,6 +254,7 @@ public:
         stream->writeBool(m_noExternalReflection);
         stream->writeBool(m_noInternalReflection);
         stream->writeBool(m_noTransmission);
+        stream->writeBool(m_disableEtaScaling);
         stream->writeFloat(m_eta);
     }
 
@@ -282,6 +287,17 @@ public:
             m_specularTransmittance->usesRayDifferentials();
 
         BSDF::configure();
+    }
+
+    /** Scale factor to account for the solid angle compression that occurs when
+     * crossing the interface. */
+    inline Float solidAngleCompressionFactor(Float cosThetaT, const BSDFSamplingRecord &bRec) const {
+        if (m_disableEtaScaling) {
+            return 1.0f;
+        } else {
+            return (bRec.mode == ERadiance)
+                ? (cosThetaT < 0 ? math::square(m_invEta) : math::square(m_eta)) : 1.0f;
+        }
     }
 
     Spectrum eval(const BSDFSamplingRecord &bRec, EMeasure measure) const {
@@ -370,11 +386,9 @@ public:
             /* Missing term in the original paper: account for the solid angle
                compression when tracing radiance -- this is necessary for
                bidirectional methods */
-            Float factor = (bRec.mode == ERadiance)
-                ? (Frame::cosTheta(bRec.wi) > 0 ? m_invEta : m_eta) : 1.0f;
-
+            Float factor = solidAngleCompressionFactor(Frame::cosTheta(bRec.wo), bRec);
             return m_specularTransmittance->eval(bRec.its)
-                * std::abs(value * factor * factor);
+                * std::abs(value * factor);
         }
     }
 
@@ -393,13 +407,24 @@ public:
              reflect         = Frame::cosTheta(bRec.wi)
                              * Frame::cosTheta(bRec.wo) > 0;
 
+        Float cosThetaI = Frame::cosTheta(bRec.wi);
+        if (m_eta < 1)
+            cosThetaI = -cosThetaI;
+        if (m_noExternalReflection) {
+            if (cosThetaI > 0) // reflection would happen towards the 'outside' with lower IOR
+                hasReflection = false;
+        }
+        if (m_noInternalReflection) {
+            if (cosThetaI < 0) // reflection would happen towards the 'inside' with higher IOR
+                hasReflection = false;
+        }
+
         Vector H;
         Float dwh_dwo;
 
         if (reflect) {
             /* Zero probability if this component was not requested */
-            if ((bRec.component != -1 && bRec.component != 0)
-                || !(bRec.typeMask & EGlossyReflection))
+            if (!hasReflection)
                 return 0.0f;
 
             /* Calculate the reflection half-vector */
@@ -409,8 +434,7 @@ public:
             dwh_dwo = 1.0f / (4.0f * dot(bRec.wo, H));
         } else {
             /* Zero probability if this component was not requested */
-            if ((bRec.component != -1 && bRec.component != 1)
-                || !(bRec.typeMask & EGlossyTransmission))
+            if (!hasTransmission)
                 return 0.0f;
 
             /* Calculate the transmission half-vector */
@@ -461,8 +485,19 @@ public:
         bool hasReflection = ((bRec.component == -1 || bRec.component == 0)
                               && (bRec.typeMask & EGlossyReflection)),
              hasTransmission = ((bRec.component == -1 || bRec.component == 1)
-                              && (bRec.typeMask & EGlossyTransmission)),
-             sampleReflection = hasReflection;
+                              && (bRec.typeMask & EGlossyTransmission));
+
+        Float cosThetaI = Frame::cosTheta(bRec.wi);
+        if (m_eta < 1)
+            cosThetaI = -cosThetaI;
+        if (m_noExternalReflection) {
+            if (cosThetaI > 0) // reflection would happen towards the 'outside' with lower IOR
+                hasReflection = false;
+        }
+        if (m_noInternalReflection) {
+            if (cosThetaI < 0) // reflection would happen towards the 'inside' with higher IOR
+                hasReflection = false;
+        }
 
         if (!hasReflection && !hasTransmission)
             return Spectrum(0.0f);
@@ -494,6 +529,7 @@ public:
         Float F = fresnelDielectricExt(dot(bRec.wi, m), cosThetaT, m_eta);
         Spectrum weight(1.0f);
 
+        bool sampleReflection = hasReflection;
         if (hasReflection && hasTransmission) {
             if (bRec.sampler->next1D() > F)
                 sampleReflection = false;
@@ -515,14 +551,6 @@ public:
             Float cosTheta = Frame::cosTheta(bRec.wi);
             if (m_eta < 1)
                 cosTheta = -cosTheta;
-            if (m_noExternalReflection) {
-                if (cosTheta > 0) // reflection towards the side with lower IOR
-                    return Spectrum(0.0f);
-            }
-            if (m_noInternalReflection) {
-                if (cosTheta < 0) // reflection towards the side with higher IOR
-                    return Spectrum(0.0f);
-            }
 
             weight *= m_specularReflectance->eval(bRec.its);
         } else {
@@ -544,12 +572,8 @@ public:
             if (Frame::cosTheta(bRec.wi) * Frame::cosTheta(bRec.wo) >= 0)
                 return Spectrum(0.0f);
 
-            /* Radiance must be scaled to account for the solid angle compression
-               that occurs when crossing the interface. */
-            Float factor = (bRec.mode == ERadiance)
-                ? (cosThetaT < 0 ? m_invEta : m_eta) : 1.0f;
-
-            weight *= m_specularTransmittance->eval(bRec.its) * (factor * factor);
+            Float factor = solidAngleCompressionFactor(cosThetaT, bRec);
+            weight *= m_specularTransmittance->eval(bRec.its) * factor;
         }
 
         if (m_sampleVisible)
@@ -567,8 +591,19 @@ public:
         bool hasReflection = ((bRec.component == -1 || bRec.component == 0)
                               && (bRec.typeMask & EGlossyReflection)),
              hasTransmission = ((bRec.component == -1 || bRec.component == 1)
-                              && (bRec.typeMask & EGlossyTransmission)),
-             sampleReflection = hasReflection;
+                              && (bRec.typeMask & EGlossyTransmission));
+
+        Float cosThetaI = Frame::cosTheta(bRec.wi);
+        if (m_eta < 1)
+            cosThetaI = -cosThetaI;
+        if (m_noExternalReflection) {
+            if (cosThetaI > 0) // reflection would happen towards the 'outside' with lower IOR
+                hasReflection = false;
+        }
+        if (m_noInternalReflection) {
+            if (cosThetaI < 0) // reflection would happen towards the 'inside' with higher IOR
+                hasReflection = false;
+        }
 
         if (!hasReflection && !hasTransmission)
             return Spectrum(0.0f);
@@ -601,6 +636,7 @@ public:
         Float F = fresnelDielectricExt(dot(bRec.wi, m), cosThetaT, m_eta);
         Spectrum weight(1.0f);
 
+        bool sampleReflection = hasReflection;
         if (hasReflection && hasTransmission) {
             if (bRec.sampler->next1D() > F) {
                 sampleReflection = false;
@@ -624,18 +660,6 @@ public:
             if (Frame::cosTheta(bRec.wi) * Frame::cosTheta(bRec.wo) <= 0)
                 return Spectrum(0.0f);
 
-            Float cosTheta = Frame::cosTheta(bRec.wi);
-            if (m_eta < 1)
-                cosTheta = -cosTheta;
-            if (m_noExternalReflection) {
-                if (cosTheta > 0) // reflection towards the side with lower IOR
-                    return Spectrum(0.0f);
-            }
-            if (m_noInternalReflection) {
-                if (cosTheta < 0) // reflection towards the side with higher IOR
-                    return Spectrum(0.0f);
-            }
-
             weight *= m_specularReflectance->eval(bRec.its);
 
             /* Jacobian of the half-direction mapping */
@@ -657,12 +681,8 @@ public:
             if (Frame::cosTheta(bRec.wi) * Frame::cosTheta(bRec.wo) >= 0)
                 return Spectrum(0.0f);
 
-            /* Radiance must be scaled to account for the solid angle compression
-               that occurs when crossing the interface. */
-            Float factor = (bRec.mode == ERadiance)
-                ? (cosThetaT < 0 ? m_invEta : m_eta) : 1.0f;
-
-            weight *= m_specularTransmittance->eval(bRec.its) * (factor * factor);
+            Float factor = solidAngleCompressionFactor(cosThetaT, bRec);
+            weight *= m_specularTransmittance->eval(bRec.its) * factor;
 
             /* Jacobian of the half-direction mapping */
             Float sqrtDenom = dot(bRec.wi, m) + bRec.eta * dot(bRec.wo, m);
@@ -736,6 +756,7 @@ private:
     bool m_noExternalReflection;
     bool m_noInternalReflection;
     bool m_noTransmission;
+    bool m_disableEtaScaling;
 };
 
 /* Fake glass shader -- it is really hopeless to visualize
