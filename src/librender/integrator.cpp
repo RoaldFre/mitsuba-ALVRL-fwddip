@@ -139,6 +139,7 @@ void SamplingIntegrator::wakeup(ConfigurableObject *parent,
     /* Do nothing by default */
 }
 
+static StatsCounter cameraRaysTraced("General", "Camera rays traced");
 void SamplingIntegrator::renderBlock(const Scene *scene,
         const Sensor *sensor, Sampler *sampler, ImageBlock *block,
         const bool &stop, const std::vector< TPoint2<uint8_t> > &points) const {
@@ -193,6 +194,7 @@ void SamplingIntegrator::renderBlock(const Scene *scene,
             sampler->advance();
         }
     }
+    cameraRaysTraced += points.size() * sampler->getSampleCount();
 }
 
 MonteCarloIntegrator::MonteCarloIntegrator(const Properties &props)
