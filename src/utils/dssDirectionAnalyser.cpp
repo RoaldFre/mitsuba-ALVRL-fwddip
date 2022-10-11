@@ -127,7 +127,7 @@ public:
         //auto [integral, integralErr] = dss->computeDirectionsIntegral(
         auto thePair = dss->computeDirectionsIntegral(
                 scene, Spectrum(1.0f),
-                its_out, d_out,
+                its_out, d_out, false,
                 its_in,
                 extraParams,
                 bsdfMeasure, sampler, true /* absify! */,

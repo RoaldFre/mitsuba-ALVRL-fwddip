@@ -990,6 +990,7 @@ public:
             const Scene *scene, const Spectrum &throughput,
             const Intersection its_out,
             const Vector d_out,
+            const bool requestOutwardDirection,
             const Intersection its_in,
             const void *extraParams,
             const EMeasure check_bsdfMeasure,
@@ -1086,6 +1087,9 @@ protected:
      *
      * \param rec_wi Direction for recursive wi query, in world coordinates.
      *
+     * \param requestOutwardDirection Request a rec_wi that points away from
+     * the medium.
+     *
      * \return The value of the BSDF, *including both cosine factors* (or
      * only the one relevant factor if the accompagnying BSDF is not
      * smooth)!
@@ -1097,6 +1101,7 @@ protected:
             Vector &rec_wi, EMeasure &bsdfMeasure,
             Float &pdf_d_in_and_rec_wi,
             const Spectrum &throughput,
+            bool requestOutwardDirection,
             const void *extraParams,
             Sampler *sampler) const;
 
@@ -1107,6 +1112,7 @@ protected:
             const Intersection &its_in,  const Vector &d_in,
             const Vector &rec_wi, EMeasure bsdfMeasure,
             const Spectrum &throughput,
+            bool requestOutwardDirection,
             const void *extraParams) const;
 
     /**
@@ -1169,6 +1175,7 @@ protected:
     Spectrum sampleIndirect(const Scene *scene, Sampler *sampler,
             Intersection &its_in, const Intersection &its_out,
             const Vector &d_out, const Spectrum &effectiveThroughput,
+            bool requestOutwardDirection,
             Vector &d_in, Vector &rec_wi, void *extraParams,
             EMeasure &bsdfMeasure, Spectrum &bsdfVal) const;
 
@@ -1176,6 +1183,7 @@ protected:
     Spectrum pdfIndirect(const Scene *scene,
             const Intersection &its_in, const Intersection &its_out,
             const Vector &d_out, const Spectrum &effectiveThroughput,
+            bool requestOutwardDirection,
             const Vector &d_in, const Vector &rec_wi, const void *extraParams,
             EMeasure bsdfMeasure) const;
 
@@ -1215,6 +1223,7 @@ protected:
             const Intersection &its_out, const Vector &d,
             const Spectrum &channelWeight,
             const Spectrum &channelWeightedThroughput,
+            bool requestOutwardDirection,
             Spectrum &LiContribution,
             IndirectSamplingRecord &indirectSample, void * extraParams) const;
 
@@ -1222,6 +1231,7 @@ protected:
             const Intersection &its_out, const Vector &d,
             const Spectrum &channelWeight,
             const Spectrum &channelWeightedThroughput,
+            bool requestOutwardDirection,
             Spectrum &LiContribution,
             IndirectSamplingRecord &indirectSample, void * extraParams) const;
 
@@ -1261,6 +1271,7 @@ protected:
     void checkSourcesOfVariance(
             const Scene *scene, const Spectrum &throughput,
             Intersection its_out, Vector d_out,
+            bool requestOutwardDirection,
             Intersection check_its_in,
             Vector check_d_in,
             Vector check_rec_wi,
