@@ -51,7 +51,7 @@ MTS_NAMESPACE_BEGIN
 
 #define WARN_INCONSISTENT_PDFS false /* Warn about inconsistent pdfs? */
 #define WARN_INCONSISTENT_PDFS_THRESHOLD 1e-2 /* Relative error threshold to warn */
-#define REJECT_INCONSISTENT_PDFS true /* Reject sampling with inconsistent pdfs? */
+#define REJECT_INCONSISTENT_PDFS false /* Reject sampling with inconsistent pdfs? */
 #define REJECT_INCONSISTENT_PDFS_WARN false /* Print warning when rejecting? */
 #define REJECT_INCONSISTENT_PDFS_THRESHOLD 1e-1 /* Relative error threshold to reject */
 
