@@ -270,11 +270,12 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
 
     Log(EInfo, "DirectSamplingSubsurface settings: directSampling %d, "
             "MIS %d, singleChannel %d, allowIncomingOutgoingDirections %d, "
-            "minIntRefl %d, maxIntRefl %d, irw %f",
+            "minIntRefl %d, maxIntRefl %d, irw %f, SIRsurface %d, SIRnonSurf %d",
             m_directSampling, m_directSamplingMIS,
             m_singleChannel, m_allowIncomingOutgoingDirections,
             m_minInternalReflections, m_maxInternalReflections,
-            m_internalReflectionWeight);
+            m_internalReflectionWeight,
+            m_numSIRsurface, m_SIRnonSurfaceOversamplingFactor);
     {
         LockGuard lock(sourcesMutex);
         m_sourcesIndex = sourcesIndex++;
@@ -2007,9 +2008,11 @@ std::pair<Float, Float> DirectSamplingSubsurface::computeDirectionsIntegral(
  *
  * Convention: d should point inwards, conforming to a traditional 'wi'
  * vector. */
-Spectrum DirectSamplingSubsurface::Li_internal(const Scene *scene, Sampler *sampler,
+Spectrum DirectSamplingSubsurface::Li_internal(
+        const Scene *scene, Sampler *sampler,
         const Intersection &its_out, const Vector &d,
-        const Spectrum &throughput, int &splits, int depth, int numInternalRefl) const {
+        const Spectrum &throughput, int &splits,
+        int depth, int numInternalRefl) const {
 
     Assert(m_maxInternalReflections < 0 || numInternalRefl <= m_maxInternalReflections);
 
