@@ -73,7 +73,15 @@ struct MTS_EXPORT_RENDER Monopole {
 
 
 struct MTS_EXPORT_RENDER DipoleConfig {
-    bool rejectInternalIncoming; /// reject 'internal' incoming direction wrt the effective normal?
+    /**
+     * Reject incoming directions if their cosine w.r.t. the effective
+     * normal exceeds this value.
+     * A value of 0 rejects incident directions that appear to come from 
+     * 'within' the medium itself when compared to the implicit planar
+     * boundary given by the effective normal.
+     * A value of 1 allows all incoming directions.
+     */
+    Float maxIncomingEffectiveCosine;
     bool reciprocal;
     TangentPlaneMode tangentMode;
     ZvMode zvMode;
@@ -90,7 +98,7 @@ struct MTS_EXPORT_RENDER DipoleConfig {
     DipoleConfig(const Properties &props);
 
     DipoleConfig(Stream *stream) {
-        rejectInternalIncoming = stream->readBool();
+        maxIncomingEffectiveCosine = stream->readFloat();
         reciprocal = stream->readBool();
         tangentMode = static_cast<TangentPlaneMode>(stream->readInt());
         zvMode = static_cast<ZvMode>(stream->readInt());
@@ -100,7 +108,7 @@ struct MTS_EXPORT_RENDER DipoleConfig {
     }
 
     void save(Stream *stream) const {
-        stream->writeBool(rejectInternalIncoming);
+        stream->writeFloat(maxIncomingEffectiveCosine);
         stream->writeBool(reciprocal);
         stream->writeInt(tangentMode);
         stream->writeInt(zvMode);
@@ -111,7 +119,7 @@ struct MTS_EXPORT_RENDER DipoleConfig {
 
     /// Should we reject the d_in of m wrt the given effective n_in?
     bool shouldRejectDin(const Monopole &m, const Vector &n_in_effective) const {
-        if (rejectInternalIncoming && m.hasDin() && dot(n_in_effective, m.d_in) > 0)
+        if (m.hasDin() && dot(n_in_effective, m.d_in) > maxIncomingEffectiveCosine)
             return true;
         return false;
     }
@@ -643,8 +651,8 @@ protected:
 
 
 inline DipoleConfig::DipoleConfig(const Properties &props) {
-    rejectInternalIncoming = props.getBoolean(
-            "rejectInternalIncoming", false);
+    maxIncomingEffectiveCosine = props.getFloat(
+            "maxIncomingEffectiveCosine", 1);
     reciprocal = props.getBoolean("reciprocal", false);
 
     std::string zvModeStr = props.getString("zvMode", "diff");
@@ -859,6 +867,7 @@ FINLINE bool DipoleModel::virtToReal(
 
     r.d_in = v.d_in  -  2*dot(n_in_effective, v.d_in) * n_in_effective;
 
+#ifdef MTS_DIPOLE_DEBUG
     Vector R_check = v.R + zv * n_in_effective;
     Vector n_in_check = v.n_in  -  2*dot(n_in_effective, v.n_in) * n_in_effective;
     if (!(((r.R + R_check).length() == 0 && r.R.isZero() && R_check.isZero())
@@ -871,6 +880,7 @@ FINLINE bool DipoleModel::virtToReal(
                 (r.R - R_check).length() / (r.R + R_check).length());
     }
     AssertWarn((r.n_in - n_in_check).length() / (r.n_in + n_in_check).length() < Epsilon);
+#endif
 
     return true;
 }
