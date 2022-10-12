@@ -71,7 +71,8 @@ public:
     /// Get the incident radiance for a point on the inside of the surface
     virtual Spectrum Li(const Scene *scene, Sampler *sampler,
             const Intersection &its, const Vector &d,
-            const Spectrum &throughput, int &splits, int depth) const {
+            const Spectrum &throughput, int &splits,
+            int numSubsurfaceInteractions, int depth) const {
         Log(EError, "Li unsupported for this subsurface material");
         return Spectrum(0.0f);
     }

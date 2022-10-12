@@ -200,19 +200,22 @@ public:
     /// Construct an invalid radiance query record
     inline RadianceQueryRecord()
      : type(0), scene(NULL), sampler(NULL), medium(NULL),
-       depth(0), splits(0), throughput(1.0f), alpha(0), dist(-1), extra(0) {
+       depth(0), numSubsurfInteractions(0), splits(0), throughput(1.0f),
+       alpha(0), dist(-1), extra(0) {
     }
 
     /// Construct a radiance query record for the given scene and sampler
     inline RadianceQueryRecord(const Scene *scene, Sampler *sampler)
      : type(0), scene(scene), sampler(sampler), medium(NULL),
-       depth(0), splits(0), throughput(1.0f), alpha(0), dist(-1), extra(0) {
+       depth(0), numSubsurfInteractions(0), splits(0), throughput(1.0f),
+       alpha(0), dist(-1), extra(0) {
     }
 
     /// Copy constructor
     inline RadianceQueryRecord(const RadianceQueryRecord &rRec)
      : type(rRec.type), scene(rRec.scene), sampler(rRec.sampler), medium(rRec.medium),
-       depth(rRec.depth), splits(rRec.splits), throughput(rRec.throughput),
+       depth(rRec.depth), numSubsurfInteractions(rRec.numSubsurfInteractions),
+       splits(rRec.splits), throughput(rRec.throughput),
        alpha(rRec.alpha), dist(rRec.dist), extra(rRec.extra) {
     }
 
@@ -221,6 +224,7 @@ public:
         type = _type;
         medium = _medium;
         depth = 1;
+        numSubsurfInteractions = 0;
         splits = 0;
         throughput = Spectrum(1.0f);
         extra = 0;
@@ -234,6 +238,7 @@ public:
         scene = parent.scene;
         sampler = parent.sampler;
         depth = parent.depth+1;
+        numSubsurfInteractions = parent.numSubsurfInteractions;
         splits = parent.splits;
         throughput = parent.throughput * thisWeight;
         medium = parent.medium;
@@ -247,6 +252,7 @@ public:
         scene = parent.scene;
         sampler = parent.sampler;
         depth = parent.depth+1;
+        numSubsurfInteractions = parent.numSubsurfInteractions;
         splits = parent.splits;
         throughput = parent.throughput * thisWeight;
         medium = parent.medium;
@@ -304,6 +310,9 @@ public:
 
     /// Current depth value (# of light bounces) (*)
     int depth;
+
+    /// Current number of subsurface interactions encountered (*)
+    int numSubsurfInteractions;
 
     /// Current number of path splits (0 means no splits) (*)
     int splits;

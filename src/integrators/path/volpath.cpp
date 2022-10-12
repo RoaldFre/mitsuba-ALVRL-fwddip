@@ -126,11 +126,14 @@ protected:
     int m_minMediumScatteringChain;
     int m_maxMediumScatteringChain;
 
+    int m_maxSubsurfInteractions; /// Maximum number of LiSub() subsurface interactions
+
 public:
     VolumetricPathTracer(const Properties &props) : MonteCarloIntegrator(props) {
         m_onlyPathsThatEnteredAVolume = props.getBoolean("onlyPathsThatEnteredAVolume", false);
         m_minMediumScatteringChain = props.getInteger("minMediumScatteringChain", -1);
         m_maxMediumScatteringChain = props.getInteger("maxMediumScatteringChain", -1);
+        m_maxSubsurfInteractions = props.getInteger("maxSubsurfInteractions", -1);
         m_explicitSubsurfBoundary = props.getBoolean("explicitSubsurfBoundary", true);
         m_dumpLuminanceOfSamples = props.getBoolean("dumpLuminanceOfSamples", false);
 
@@ -147,6 +150,7 @@ public:
         m_onlyPathsThatEnteredAVolume = stream->readBool();
         m_minMediumScatteringChain = stream->readInt();
         m_maxMediumScatteringChain = stream->readInt();
+        m_maxSubsurfInteractions = stream->readInt();
         m_explicitSubsurfBoundary = stream->readBool();
         m_dumpLuminanceOfSamples = false; // ... this hack is not very useful remotely...
     }
@@ -156,6 +160,7 @@ public:
         stream->writeBool(m_onlyPathsThatEnteredAVolume);
         stream->writeInt(m_minMediumScatteringChain);
         stream->writeInt(m_maxMediumScatteringChain);
+        stream->writeInt(m_maxSubsurfInteractions);
         stream->writeBool(m_explicitSubsurfBoundary);
     }
 
@@ -205,7 +210,9 @@ public:
             const int origMediumInteractionChain,
             const bool origHadVolumeInteraction,
             const int n) const {
-        if (rRec.depth > m_maxDepth && m_maxDepth > 0) {
+        if ((m_maxDepth >= 0 && rRec.depth > m_maxDepth)
+                || (m_maxSubsurfInteractions >= 0
+                    && rRec.numSubsurfInteractions > m_maxSubsurfInteractions)) {
             avgPathLength.incrementBase();
             avgPathLength += rRec.depth;
             return Spectrum(0.0f);
@@ -533,9 +540,14 @@ public:
              * conditions) */
             if (its.hasSubsurface() && its.hasLiSubsurface() && m_explicitSubsurfBoundary) {
                 if (rRec.type & RadianceQueryRecord::ESubsurfaceRadiance) {
-                    if (!m_onlyPathsThatEnteredAVolume || hasEnteredAVolume)
-                        Li += throughput * its.LiSub(scene, rRec.sampler, wo,
-                                        throughput, rRec.splits, rRec.depth);
+                    if (!m_onlyPathsThatEnteredAVolume || hasEnteredAVolume) {
+                        if (m_maxSubsurfInteractions < 0
+                                || rRec.numSubsurfInteractions < m_maxSubsurfInteractions) {
+                            Li += throughput * its.LiSub(scene, rRec.sampler, wo,
+                                            throughput, rRec.splits,
+                                            rRec.numSubsurfInteractions, rRec.depth);
+                        }
+                    }
                 }
 
                 /* If 'outgoing' direction is away from the subsurf medium 
@@ -694,6 +706,7 @@ public:
             << "  onlyPathsThatEnteredAVolume = " << m_onlyPathsThatEnteredAVolume << "," << endl
             << "  minMediumScatteringChain = " << m_minMediumScatteringChain << "," << endl
             << "  maxMediumScatteringChain = " << m_maxMediumScatteringChain << "," << endl
+            << "  maxSubsurfInteractions = " << m_maxSubsurfInteractions << "," << endl
             << "  maxDepth = " << m_maxDepth << "," << endl
             << "  rr = " << m_rr.toString() << "," << endl
             << "  strictNormals = " << m_strictNormals << endl

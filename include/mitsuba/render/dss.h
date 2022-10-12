@@ -979,7 +979,8 @@ public:
      * appropriate (non-unity) value */
     Spectrum Li(const Scene *scene, Sampler *sampler,
             const Intersection &its, const Vector &d,
-            const Spectrum &throughput, int &splits, int depth) const;
+            const Spectrum &throughput, int &splits,
+            int numSubsurfaceInteractions, int depth) const;
 
     bool supportsLi() const {
         return true;
@@ -1022,7 +1023,7 @@ protected:
     Spectrum Li_internal(const Scene *scene, Sampler *sampler,
             const Intersection &its, const Vector &d,
             const Spectrum &throughput, int &splits, int depth,
-            int numInternalRefl) const;
+            int numSubsurfaceInteractions, int numInternalRefl) const;
 
     /**
      * \brief Should be called by derived classes during the configure()

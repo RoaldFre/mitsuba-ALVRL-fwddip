@@ -94,11 +94,14 @@ protected:
     bool m_onlySingleScatter;
     bool m_noSingleScatter;
     bool m_explicitSubsurfBoundary;
+    int m_maxSubsurfInteractions; /// Maximum number of LiSub() subsurface interactions
+
 public:
     SimpleVolumetricPathTracer(const Properties &props) : MonteCarloIntegrator(props) {
         m_onlySingleScatter = props.getBoolean("onlySingleScatter", false);
         m_noSingleScatter = props.getBoolean("noSingleScatter", false);
         m_explicitSubsurfBoundary = props.getBoolean("explicitSubsurfBoundary", true);
+        m_maxSubsurfInteractions = props.getInteger("maxSubsurfInteractions", -1);
         if (m_onlySingleScatter && m_noSingleScatter) {
             Log(EError, "Conflicting options: onlySingleScatter and noSingleScatter are both active!");
         }
@@ -110,6 +113,7 @@ public:
         m_onlySingleScatter = stream->readBool();
         m_noSingleScatter = stream->readBool();
         m_explicitSubsurfBoundary = stream->readBool();
+        m_maxSubsurfInteractions = stream->readInt();
      }
 
     void serialize(Stream *stream, InstanceManager *manager) const {
@@ -117,6 +121,7 @@ public:
         stream->writeBool(m_onlySingleScatter);
         stream->writeBool(m_noSingleScatter);
         stream->writeBool(m_explicitSubsurfBoundary);
+        stream->writeInt(m_maxSubsurfInteractions);
     }
 
     Spectrum Li(const RayDifferential &r, RadianceQueryRecord &rRec) const {
@@ -130,6 +135,14 @@ public:
         bool scattered = rRec.depth != 1;
         int mediumInteractionChain = 0;
         Float eta = 1.0f;
+
+        if ((m_maxDepth >= 0 && rRec.depth > m_maxDepth)
+                || (m_maxSubsurfInteractions >= 0
+                   && rRec.numSubsurfInteractions > m_maxSubsurfInteractions)) {
+            avgPathLength.incrementBase();
+            avgPathLength += rRec.depth;
+            return Spectrum(0.0f);
+        }
 
         /* Perform the first ray intersection (or ignore if the
            intersection has already been provided). */
@@ -331,9 +344,14 @@ public:
                  * allowIncomingOutgoingDirections to check boundary 
                  * conditions) */
                 if (its.hasSubsurface() && its.hasLiSubsurface() && m_explicitSubsurfBoundary) {
-                    if (rRec.type & RadianceQueryRecord::ESubsurfaceRadiance)
-                        Li += throughput * its.LiSub(scene, rRec.sampler, wo,
-                                throughput, rRec.splits, rRec.depth);
+                    if (rRec.type & RadianceQueryRecord::ESubsurfaceRadiance) {
+                        if (m_maxSubsurfInteractions < 0
+                                || rRec.numSubsurfInteractions < m_maxSubsurfInteractions) {
+                            Li += throughput * its.LiSub(scene, rRec.sampler, wo,
+                                            throughput, rRec.splits,
+                                            rRec.numSubsurfInteractions, rRec.depth);
+                        }
+                    }
 
                     /* If 'outgoing' direction is away from the medium (wo 
                      * pointing into the medium) -> then we are looking at 
@@ -365,6 +383,7 @@ public:
         std::ostringstream oss;
         oss << "SimpleVolumetricPathTracer[" << endl
             << "  maxDepth = " << m_maxDepth << "," << endl
+            << "  maxSubsurfInteractions = " << m_maxSubsurfInteractions << "," << endl
             << "  rr = " << m_rr.toString() << "," << endl
             << "  strictNormals = " << m_strictNormals << endl
             << "]";

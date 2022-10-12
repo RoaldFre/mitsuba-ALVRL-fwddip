@@ -134,7 +134,8 @@ public:
      * shape is actually a subsurface integrator.
      */
     inline Spectrum LiSub(const Scene *scene, Sampler *sampler,
-            const Vector &d, const Spectrum &throughput, int &splits, int depth) const;
+            const Vector &d, const Spectrum &throughput,
+            int &splits, int numSubsurfaceInteractions, int depth) const;
 
     /// Computes texture coordinate partials
     void computePartials(const RayDifferential &ray);

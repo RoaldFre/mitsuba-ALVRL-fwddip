@@ -70,8 +70,8 @@ inline Spectrum Intersection::LoSub(const Scene *scene,
 
 inline Spectrum Intersection::LiSub(const Scene *scene,
         Sampler *sampler, const Vector &d,
-        const Spectrum &throughput, int &splits, int depth) const {
-    return shape->getSubsurface()->Li(scene, sampler, *this, d, throughput, splits, depth);
+        const Spectrum &throughput, int &splits, int numSubsurfaceInteractions, int depth) const {
+    return shape->getSubsurface()->Li(scene, sampler, *this, d, throughput, splits, numSubsurfaceInteractions, depth);
 }
 
 inline const BSDF *Intersection::getBSDF() const {

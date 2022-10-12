@@ -1890,10 +1890,11 @@ void DirectSamplingSubsurface::checkSourcesOfVariance(
 
 Spectrum DirectSamplingSubsurface::Li(const Scene *scene, Sampler *sampler,
         const Intersection &its, const Vector &d,
-        const Spectrum &throughput, int &splits, int depth) const {
+        const Spectrum &throughput, int &splits,
+        int numSubsurfaceInteractions, int depth) const {
     avgNumSplits.incrementBase();
     return Li_internal(
-            scene, sampler, its, d, throughput, splits, depth, 0);
+            scene, sampler, its, d, throughput, splits, depth, numSubsurfaceInteractions, 0);
 }
 
 
@@ -2012,7 +2013,7 @@ Spectrum DirectSamplingSubsurface::Li_internal(
         const Scene *scene, Sampler *sampler,
         const Intersection &its_out, const Vector &d,
         const Spectrum &throughput, int &splits,
-        int depth, int numInternalRefl) const {
+        int depth, int numSubsurfaceInteractions, int numInternalRefl) const {
 
     Assert(m_maxInternalReflections < 0 || numInternalRefl <= m_maxInternalReflections);
 
@@ -2151,7 +2152,8 @@ Spectrum DirectSamplingSubsurface::Li_internal(
             for (int s = 0; s < n; s++) {
                 Spectrum Li = DirectSamplingSubsurface::Li_internal(
                         scene, sampler, its_in, rec_wi,
-                        newThroughput, splits, depth + 1, numInternalRefl);
+                        newThroughput, splits, depth + 1,
+                        numSubsurfaceInteractions, numInternalRefl);
                 result += Li * thisWeight;
             }
         } else {
@@ -2173,6 +2175,7 @@ Spectrum DirectSamplingSubsurface::Li_internal(
             RadianceQueryRecord rRec;
             rRecBase.depth = depth;
             rRecBase.splits = splits;
+            rRecBase.numSubsurfInteractions = numSubsurfaceInteractions + 1;
             rRecBase.medium = its_in.getTargetMedium(1.0f);
             RayDifferential ray(p_in, rec_wi, its_out.time);
 
