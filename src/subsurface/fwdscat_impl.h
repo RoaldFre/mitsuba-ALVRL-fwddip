@@ -243,9 +243,9 @@ FS_INLINE Float FwdScat::evalPlaneSource(Vector u0, Vector uL,
 
 
 // Strategy weights, must sum to one (TODO: possibly different weights for effective BRDF?)
-static constexpr Float lengthSample_w1 = 0.5; /* short length limit */
-static constexpr Float lengthSample_w2 = 0.5; /* long length limit */
-static constexpr Float lengthSample_w3 = 0.0; /* absorption */
+static constexpr Float lengthSample_w1 = 0.49; /* short length limit */
+static constexpr Float lengthSample_w2 = 0.49; /* long length limit */
+static constexpr Float lengthSample_w3 = 0.02; /* absorption, necessary protection for the 'lengths before the peak' part of our long length limit */
 
 
 
