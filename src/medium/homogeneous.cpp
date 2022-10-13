@@ -284,6 +284,7 @@ public:
         Float samplingDensity = m_samplingDensity;
 
         int sampledChannel = -1;
+        Float channelWeight = 1;
         if (rand < wgt) {
             rand /= wgt;
             if (m_strategy != EMaximum) {
@@ -291,7 +292,9 @@ public:
                 if (m_strategy == EAutoSingle) {
                     if (throughput) {
                         Assert(!throughput->isZero());
-                        sampledChannel = throughput->sampleNonZeroChannelUniform(sampler);
+                        Spectrum probs;
+                        sampledChannel = throughput->sampleWeightedChannel(sampler, &probs);
+                        channelWeight = 1.0f/probs[sampledChannel];
                     } else {
                         sampledChannel = sampler->next1D() * SPECTRUM_SAMPLES;
                     }
@@ -373,9 +376,8 @@ public:
                 if (m_strategy == EAutoSingle) {
                     /* Force the contribution into a single channel */
                     if (i == sampledChannel) {
-                        mRec.transmittance[i] = math::fastexp(-m_sigmaT[i] * sampledDistance)
-                                * (throughput ? throughput->numNonZeroChannels()
-                                              : SPECTRUM_SAMPLES);
+                        mRec.transmittance[i] = channelWeight
+                                * math::fastexp(-m_sigmaT[i] * sampledDistance);
                     } else {
                         mRec.transmittance[i] = 0;
                     }
