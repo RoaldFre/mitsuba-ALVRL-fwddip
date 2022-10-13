@@ -1011,7 +1011,7 @@ Float ProjSurfaceSampler::pdf(const Intersection &its,
     if (planePdf == 0)
         return 0.0f;
     if (!std::isfinite(planePdf) || planePdf < 0) {
-        SLog(EWarn, "Something fishy happened");
+        SLog(EWarn, "Something fishy happened with the plane pdf: %f", planePdf);
         return 0.0f;
     }
     /* We should be able to choose the origin of our intersection
@@ -1892,6 +1892,8 @@ Spectrum DirectSamplingSubsurface::Li(const Scene *scene, Sampler *sampler,
         const Intersection &its, const Vector &d,
         const Spectrum &throughput, int &splits,
         int numSubsurfaceInteractions, int depth) const {
+    if (throughput.isZero())
+        return Spectrum(0.0f);
     avgNumSplits.incrementBase();
     return Li_internal(
             scene, sampler, its, d, throughput, splits, depth, numSubsurfaceInteractions, 0);
@@ -2014,7 +2016,7 @@ Spectrum DirectSamplingSubsurface::Li_internal(
         const Intersection &its_out, const Vector &d,
         const Spectrum &throughput, int &splits,
         int depth, int numSubsurfaceInteractions, int numInternalRefl) const {
-
+    Assert(!throughput.isZero());
     Assert(m_maxInternalReflections < 0 || numInternalRefl <= m_maxInternalReflections);
 
     if (m_dumpPaths) {
@@ -2294,6 +2296,8 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
         bool requestOutwardDirection,
         Spectrum &LiDirectContribution,
         IndirectSamplingRecord &indirectSample, void * extraParams) const {
+    Assert(!channelWeightedThroughput.isZero());
+
     const Point  &p_out = its_out.p;
     const Normal &n_out = its_out.shFrame.n;
     LiDirectContribution = Spectrum(0.0f);

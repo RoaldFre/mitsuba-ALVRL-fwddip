@@ -813,6 +813,7 @@ public:
             const Vector &d_out, const Scene *scene,
             Intersection &newIts, const Spectrum &throughput,
             Sampler *sampler) const {
+        Assert(!throughput.isZero());
         if (!m_allowIncomingOutgoingDirections)
             Assert(dot(d_out, its.shFrame.n) >= 0);
         // One sample MIS weighting (balance heuristic)
@@ -841,6 +842,7 @@ public:
     Float pdfPointOnSurface(const Intersection &its,
             const Vector &d_out, const Scene *scene,
             const Intersection &newIts, const Spectrum &throughput) const {
+        Assert(!throughput.isZero());
         if (!m_allowIncomingOutgoingDirections)
             Assert(dot(d_out, its.shFrame.n) >= 0);
         // One sample MIS weighting (balance heuristic)
