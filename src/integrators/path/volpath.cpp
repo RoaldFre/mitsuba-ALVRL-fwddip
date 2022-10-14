@@ -170,10 +170,13 @@ public:
         Spectrum throughput(1.0f);
         int mediumInteractionChain = 0;
 
-        /* A word on throughputs: we explicitly pass around a throughput 
-         * value which is the troughput starting 'here', i.e. at the call 
-         * of Li(). The throughput in the rRec is *only* used for RR/path 
-         * splitting decisions! */
+        /* A word on throughputs: we explicitly pass around a throughput
+         * value which is the troughput starting 'here', i.e. at the call
+         * of Li(), which we need to compute the correct result. The full
+         * throughput in the rRec (including the part of the path before we
+         * reached this place) is *only* used for RR/path splitting decisions
+         * and for channel-importance sampling (e.g. in sampleDistance())!
+         */
         Spectrum internalThroughput(1.0f);
 
         /* Don't do RR yet, but *do* check if we need to split already, 
@@ -320,7 +323,7 @@ public:
         /*                 Radiative Transfer Equation sampling                 */
         /* ==================================================================== */
         if (rRec.medium && rRec.medium->sampleDistance(Ray(ray, 0, its.t),
-                mRec, rRec.sampler, &throughput)) {
+                mRec, rRec.sampler, &rRec.throughput)) {
             if (m_maxMediumScatteringChain >= 0
                     && mediumInteractionChain >= m_maxMediumScatteringChain)
                 return false;
@@ -603,7 +606,7 @@ public:
         }
 
         rRec.depth++;
-        return true;
+        return !throughput.isZero();
     }
 
     /**
