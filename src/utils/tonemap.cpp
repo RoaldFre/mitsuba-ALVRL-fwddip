@@ -458,6 +458,11 @@ public:
                 } catch (const std::exception &e) {
                     Log(EWarn, "Problem loading file \"%s\".", inputFile.string().c_str());
                     Log(EWarn, "Error was: %s.", e.what());
+                    optind++;
+                    if (optind >= argc) {
+                        Log(EError, "Could not load any file!");
+                        exit(1);
+                    }
                     continue;
                 }
                 n++;
