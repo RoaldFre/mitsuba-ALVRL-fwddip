@@ -149,8 +149,8 @@ public:
      */
     enum ESamplingStrategy {
         EBalance,      /// Exponential distrib.; pick a random channel each time
+        EThroughput,   /// Exponential distrib.; pick a throughput-weighted channel each time
         EManualSingle, /// Exponential distrib.; manually pick a specified channel
-        EAutoSingle,   /// Perfectly sample a single channel, no transport in other channels
         EManual,       /// Exponential distrib.; manually specify the falloff
         EMaximum,      /// Maximum-of-exponential distribution
     };
@@ -187,8 +187,8 @@ public:
 
         if (strategy == "balance") {
             m_strategy = EBalance;
-        } else if (strategy == "autosingle") {
-            m_strategy = EAutoSingle;
+        } else if (strategy == "throughput") {
+            m_strategy = EThroughput;
         } else if (strategy == "single") {
             m_strategy = EManualSingle;
 
@@ -259,6 +259,7 @@ public:
             if (m_sigmaT[i] != 0)
                 m_albedo = std::max(m_albedo, m_sigmaS[i]/m_sigmaT[i]);
         }
+        Log(EInfo, "configured with settings %s", toString().c_str());
     }
 
     void serialize(Stream *stream, InstanceManager *manager) const {
@@ -284,19 +285,20 @@ public:
         Float samplingDensity = m_samplingDensity;
 
         int sampledChannel = -1;
-        Float channelWeight = 1;
+        Spectrum channelProbs;
         if (rand < wgt) {
             rand /= wgt;
             if (m_strategy != EMaximum) {
                 /* Choose the sampling density to be used */
-                if (m_strategy == EAutoSingle) {
+                if (m_strategy == EThroughput) {
                     if (throughput) {
                         Assert(!throughput->isZero());
-                        Spectrum probs;
-                        sampledChannel = throughput->sampleWeightedChannel(sampler, &probs);
-                        channelWeight = 1.0f/probs[sampledChannel];
+                        sampledChannel = throughput->sampleWeightedChannel(
+                                sampler, &channelProbs);
                     } else {
-                        sampledChannel = sampler->next1D() * SPECTRUM_SAMPLES;
+                        sampledChannel = std::min((int) (sampler->next1D()
+                            * SPECTRUM_SAMPLES), SPECTRUM_SAMPLES-1);
+                        channelProbs = Spectrum(1.0f / SPECTRUM_SAMPLES);
                     }
                     samplingDensity = m_sigmaT[sampledChannel];
                 } else if (m_strategy == EBalance) {
@@ -358,7 +360,21 @@ public:
                 mRec.pdfSuccess /= SPECTRUM_SAMPLES;
                 break;
 
-            case EAutoSingle: /* Works out in tandem with transmittance modification */
+            case EThroughput:
+                mRec.pdfFailure = 0;
+                mRec.pdfSuccess = 0;
+                for (int i=0; i<SPECTRUM_SAMPLES; ++i) {
+                    if (m_sigmaT[i] == 0) {
+                        mRec.pdfFailure += channelProbs[i];
+                    } else {
+                        Float tmp = math::fastexp(-m_sigmaT[i] * sampledDistance)
+                                    * channelProbs[i];
+                        mRec.pdfFailure += tmp;
+                        mRec.pdfSuccess += m_sigmaT[i] * tmp;
+                    }
+                }
+                break;
+
             case EManualSingle:
             case EManual:
                 mRec.pdfFailure = math::fastexp(-samplingDensity * sampledDistance);
@@ -373,17 +389,7 @@ public:
             if (m_sigmaT[i] == 0) {
                 mRec.transmittance[i] = 1.0f;
             } else {
-                if (m_strategy == EAutoSingle) {
-                    /* Force the contribution into a single channel */
-                    if (i == sampledChannel) {
-                        mRec.transmittance[i] = channelWeight
-                                * math::fastexp(-m_sigmaT[i] * sampledDistance);
-                    } else {
-                        mRec.transmittance[i] = 0;
-                    }
-                } else {
-                    mRec.transmittance[i] = math::fastexp(-m_sigmaT[i] * sampledDistance);
-                }
+                mRec.transmittance[i] = math::fastexp(-m_sigmaT[i] * sampledDistance);
             }
         }
         mRec.pdfSuccess = mRec.pdfSuccessRev = mRec.pdfSuccess * wgt;
@@ -425,9 +431,6 @@ public:
                 mRec.pdfFailure = 1-m_maxExpDist->cdf(distance);
                 break;
 
-            case EAutoSingle:
-                Log(EError, "Can't use autosingle strategy with an eval() method [yet...]");
-
             default:
                 Log(EError, "Unknown sampling strategy!");
         }
@@ -458,10 +461,10 @@ public:
             << "  strategy = ";
 
         switch (m_strategy) {
-            case EAutoSingle: oss << "autosingle," << endl; break;
             case EManualSingle: oss << "single," << endl; break;
             case EManual: oss << "manual," << endl; break;
             case EBalance: oss << "balance," << endl; break;
+            case EThroughput: oss << "throughput," << endl; break;
             case EMaximum: oss << "maximum," << endl; break;
         }
 
