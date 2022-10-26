@@ -207,6 +207,13 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     m_numSIRsurface = props.getSize("numSIRsurface", 1);
     m_SIRnonSurfaceOversamplingFactor = props.getSize("SIRnonSurfaceOversamplingFactor", 1);
 
+    /* Increase numSIRsurface with this factor at every internal reflection
+     * (probably a good idea to use a finite maxInternalReflections!) */
+    m_numSIRsurfaceIntReflFactor = props.getFloat("numSIRsurfaceIntReflFactor", 1);
+
+    /* Force path splitting into (at least) this many paths when sampling an internal reflection event */
+    m_internalReflectionForcedSplit = props.getSize("internalReflectionForcedSplit", 0);
+
     /* Perform direct sampling of the light sources? */
     m_directSampling = props.getBoolean("directSampling", true);
 
@@ -270,12 +277,14 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
 
     Log(EInfo, "DirectSamplingSubsurface settings: directSampling %d, "
             "MIS %d, singleChannel %d, allowIncomingOutgoingDirections %d, "
-            "minIntRefl %d, maxIntRefl %d, irw %f, SIRsurface %d, SIRnonSurf %d",
+            "minIntRefl %d, maxIntRefl %d, irw %f, SIRsurface %d, SIRnonSurf %d, "
+            "SIRsurfIRFact %f, IRFSplit %zu",
             m_directSampling, m_directSamplingMIS,
             m_singleChannel, m_allowIncomingOutgoingDirections,
             m_minInternalReflections, m_maxInternalReflections,
             m_internalReflectionWeight,
-            m_numSIRsurface, m_SIRnonSurfaceOversamplingFactor);
+            m_numSIRsurface, m_SIRnonSurfaceOversamplingFactor,
+            m_numSIRsurfaceIntReflFactor, m_internalReflectionForcedSplit);
     {
         LockGuard lock(sourcesMutex);
         m_sourcesIndex = sourcesIndex++;
@@ -302,6 +311,8 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(Stream *stream,
             Subsurface(stream, manager) {
     m_numSIRsurface = stream->readSize();
     m_SIRnonSurfaceOversamplingFactor = stream->readSize();
+    m_numSIRsurfaceIntReflFactor = stream->readFloat();
+    m_internalReflectionForcedSplit = stream->readSize();
     m_directSampling = stream->readBool();
     m_directSamplingMIS = stream->readBool();
     m_singleChannel = stream->readBool();
@@ -330,6 +341,8 @@ void DirectSamplingSubsurface::serialize(Stream *stream,
     Subsurface::serialize(stream, manager);
     stream->writeSize(m_numSIRsurface);
     stream->writeSize(m_SIRnonSurfaceOversamplingFactor);
+    stream->writeFloat(m_numSIRsurfaceIntReflFactor);
+    stream->writeSize(m_internalReflectionForcedSplit);
     stream->writeBool(m_directSampling);
     stream->writeBool(m_directSamplingMIS);
     stream->writeBool(m_singleChannel);
@@ -2062,10 +2075,12 @@ Spectrum DirectSamplingSubsurface::Li_internal(
     char extraParams[extraParamsSize()];
     Spectrum LiDirect;
     bool haveIndirect;
-    if (m_numSIRsurface > 1 || m_SIRnonSurfaceOversamplingFactor > 1) {
+    size_t numSIRsurface = m_numSIRsurface * std::pow(m_numSIRsurfaceIntReflFactor, numInternalRefl);
+    if (numSIRsurface > 1 || m_SIRnonSurfaceOversamplingFactor > 1) {
         haveIndirect = indirectSample_SIR(scene, sampler, its_out, d_out,
                 channelWeight, channelWeightedThroughput,
                 !allowInternalReflection,
+                numSIRsurface, m_SIRnonSurfaceOversamplingFactor,
                 LiDirect, indirectSample, extraParams);
     } else {
         haveIndirect = indirectSample_noSIR(scene, sampler, its_out, d_out,
@@ -2135,7 +2150,7 @@ Spectrum DirectSamplingSubsurface::Li_internal(
                 goto DSS_Li_radianceSourceSampling;
 
             // Russian Roulette and path splitting
-            int numSplitsHere = 0;
+            size_t numSplitsHere = 0;
             Float q = integrator->getRR().roulette(
                     depth, newThroughput, 1.0, sampler);
             if (q == 0)
@@ -2143,12 +2158,15 @@ Spectrum DirectSamplingSubsurface::Li_internal(
             if (q == 1) { // There was no RR -> possibly try path splitting
                 numSplitsHere = integrator->getRR().split(
                         splits, newThroughput, 1.0, sampler);
+
+                // Modify num splits for internal reflection if requested
+                numSplitsHere = std::max(numSplitsHere, m_internalReflectionForcedSplit);
             }
             avgNumSplits += numSplitsHere;
 
 
 
-            int n = numSplitsHere + 1;
+            size_t n = numSplitsHere + 1;
             thisWeight /= (q * n);
             newThroughput /= (q * n);
             for (int s = 0; s < n; s++) {
@@ -2294,6 +2312,7 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
         const Spectrum &channelWeight,
         const Spectrum &channelWeightedThroughput,
         bool requestOutwardDirection,
+        size_t numSIRsurface, size_t SIRnonSurfaceOversamplingFactor,
         Spectrum &LiDirectContribution,
         IndirectSamplingRecord &indirectSample, void * extraParams) const {
     Assert(!channelWeightedThroughput.isZero());
@@ -2307,9 +2326,9 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
     if (!m_nonCollimatedLightSourcesPresent)
         return false;
 
-    // TODO: The final sample can be computed online instead of explicitly saving all samples!
+    // TODO: The final sample can be computed online instead of explicitly saving all samples! (cf. ReSTIR)
     std::vector<IndirectSamplingRecord> samples;
-    size_t totalSIRattempts = m_numSIRsurface * m_SIRnonSurfaceOversamplingFactor;
+    size_t totalSIRattempts = numSIRsurface * SIRnonSurfaceOversamplingFactor;
     samples.reserve(totalSIRattempts);
     size_t parSize = extraParamsSize();
     std::vector<char> paramVec;
@@ -2318,7 +2337,7 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
     DiscreteDistribution sampleWeights;
     sampleWeights.reserve(totalSIRattempts);
 
-    for (size_t i = 0; i < m_numSIRsurface; i++) {
+    for (size_t i = 0; i < numSIRsurface; i++) {
         IndirectSamplingRecord s;
         void *extraPars = paramSamples + i*parSize;
         Intersection its_in;
@@ -2341,7 +2360,7 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
 
         /* Inner SIR loop over all non-surface sampling (because that is 
          * typically cheaper, so we can afford more SIR samples there */
-        for (size_t j = 0; j < m_SIRnonSurfaceOversamplingFactor; j++) {
+        for (size_t j = 0; j < SIRnonSurfaceOversamplingFactor; j++) {
             do {
                 Assert(m_directSampling && m_directSamplingMIS);
 

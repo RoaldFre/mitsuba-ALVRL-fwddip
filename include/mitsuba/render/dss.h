@@ -1227,6 +1227,7 @@ protected:
             const Spectrum &channelWeight,
             const Spectrum &channelWeightedThroughput,
             bool requestOutwardDirection,
+            size_t numSIRsurface, size_t SIRnonSurfaceOversamplingFactor,
             Spectrum &LiContribution,
             IndirectSamplingRecord &indirectSample, void * extraParams) const;
 
@@ -1297,6 +1298,8 @@ protected:
      * such sample gets m_SIRnonSurfaceOversamplingFactor individual 
      * tentative extraParams and direction samples. */
     size_t m_SIRnonSurfaceOversamplingFactor;
+    Float m_numSIRsurfaceIntReflFactor;
+    size_t m_internalReflectionForcedSplit;
     ref<RadianceSources> m_sources;
     int m_sourcesIndex;
     int m_sourcesResID;
