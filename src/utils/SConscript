@@ -1,6 +1,9 @@
 Import('env', 'plugins')
 
 plugins += env.SharedLibrary('addimages', ['addimages.cpp'])
+plugins += env.SharedLibrary('colorFromMonochrome', ['colorFromMonochrome.cpp'])
+plugins += env.SharedLibrary('monochromeFromColor', ['monochromeFromColor.cpp'])
+plugins += env.SharedLibrary('downsample', ['downsample.cpp'])
 plugins += env.SharedLibrary('droplog', ['droplog.cpp'])
 plugins += env.SharedLibrary('joinrgb', ['joinrgb.cpp'])
 plugins += env.SharedLibrary('cylclip', ['cylclip.cpp'])
