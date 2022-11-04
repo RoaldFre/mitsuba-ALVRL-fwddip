@@ -1171,6 +1171,10 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
 #endif
     rec_wi = its_in.toWorld(bRec.wo);
 
+    // dubbel check for numerical rounding errors after frame conversion
+    if (requestOutwardDirection && dot(rec_wi, its_in.shFrame.n) <= 0)
+        return Spectrum(0.0f);
+
     pdf_d_in_and_rec_wi = d_in_pdf * rec_wi_pdf;
 
     if (!check_pdf_consistency("directionsFromBSSRDF", pdf_d_in_and_rec_wi,
