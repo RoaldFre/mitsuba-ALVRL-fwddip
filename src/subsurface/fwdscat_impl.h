@@ -958,11 +958,13 @@ FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_BRDF(
     FSAssert(std::isfinite(s));
     FSAssert(s >= 0);
 
+    Vector woi = -uL; // outgoing direction in 'incident' orientation
+
     // frame:
     const Vector z = n0; /* (= nL for a BSRDF if we are sampling a real
                             direction, and '-n0_real' = -nL if we are
                             sampling a virtual direction) */
-    Vector x_unnorm = uL - z*dot(z,uL);
+    Vector x_unnorm = woi - z*dot(z,woi);
     if (x_unnorm.length() <= Epsilon) {
         /* any frame will do; a will go to 0 and the sampling will be
          * uniform where needed (e.g. phi sampling) */
@@ -975,7 +977,6 @@ FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_BRDF(
     FSAssert(math::abs(dot(x,z)) < Epsilon);
     FSAssert(math::abs(dot(y,z)) < Epsilon);
 
-    Vector woi = -uL; // outgoing direction in 'incident' orientation
     /* BRDF consistency check:
      *   R == 0       if we are samping a real direction
      *   R == -|R|nL  if we are samping a virt direction
@@ -1009,7 +1010,7 @@ FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_BRDF(
     }
     double cosThetaMean = b * math::square(cosThetaSd);
     double cosTheta;
-   
+
     if (sampler) {
         cosTheta = truncnorm(cosThetaMean, cosThetaSd, -1.0, 0.0, sampler);
     } else {
@@ -1033,13 +1034,7 @@ FS_INLINE void FwdScat::implDirectionBoundaryAwareMonopole_BRDF(
         return;
     }
     double phiMean, phiLo, phiHi;
-    /* XXX TODO XXX TODO
-     * I have flipped the condition below, because we were off by an 
-     * offset of pi otherwise!
-     * TODO: Figure out what went wrong during derivation and update text!
-     * XXX TODO XXX TODO */
-    //if (a >= 0) {
-    if (a < 0) {
+    if (a >= 0) {
         phiMean = 0;
         phiLo = -M_PI_DBL;
         phiHi =  M_PI_DBL;
