@@ -131,11 +131,12 @@ public:
         Float phi = sampler->next1D() * TWO_PI;
         Float sinPhi,cosPhi;
         math::sincos(phi, &sinPhi, &cosPhi);
-        //Float r = 1 - sqrt(sampler->next1D()); // triangle
         Float u = sampler->next1D();
         Float s = sin(1./3.*atan2(2*sqrt(u*(1-u)), 1-2*u));
         Float c = math::safe_sqrt(1 - s*s);
-        Float r = m_rCutoff * pow(
+        Float maxBoundDist = std::max(xLo.length(), xHi.length());
+        Float cutoff = std::min(m_rCutoff, maxBoundDist);
+        Float r = cutoff * pow(
                 (Float) 0.5 * (1 - c) * (2 + c + sqrt(3.)*s),
                 (Float) 3./2.);
         x[0] = sinPhi * r / p;
@@ -150,11 +151,11 @@ public:
         Assert(channel>=0);
         Float p = m_p[channel];
         Float r = x.length() * p;
-        //if (p == 0 || r > 1)
-        if (p == 0 || r >= m_rCutoff)
+        Float maxBoundDist = std::max(xLo.length(), xHi.length());
+        Float cutoff = std::min(m_rCutoff, maxBoundDist);
+        if (p == 0 || r >= cutoff)
             return 0;
-        //Float pdf_r = 2*(1-r); // triangle
-        Float pdf_r = 2*(pow(m_rCutoff*m_rCutoff * r, (Float) -1./3.) - 1/m_rCutoff);
+        Float pdf_r = 2*(pow(cutoff*cutoff * r, (Float) -1./3.) - 1/cutoff);
         return pdf_r * p*p / (TWO_PI*r);
     }
 
