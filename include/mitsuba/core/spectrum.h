@@ -969,6 +969,9 @@ public:
     /* Samples a spectral channel weighted by the absolute value of this spectrum. */
     int sampleWeightedChannel(Sampler *sampler, Spectrum *probDistPtr=NULL) const;
 
+    /* Returns the probabilities used by sampleWeightedChannel() */
+    Spectrum probWeightedChannel() const;
+
     inline Spectrum zeroMask() const {
         Spectrum mask;
         for (int i = 0; i < SPECTRUM_SAMPLES; i++) {

@@ -542,10 +542,8 @@ public:
     /* Can only sample one direction, because otherwise we would be
      * branching into degenerate single-spectral-channel transport.
      *
-     * We sample a non-zero throughput channel uniformly and the effective
-     * pdf becomes averaged pdf over all (non-zero-throughput and
-     * non-(-1)-length) channels (essentially like the MIS balance
-     * heuristic). Returns the pdf */
+     * We sample a spectral channel weighted by the throughput.
+     * Returns the pdf */
     virtual Float sampleDirectionImportance(const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             Intersection &its_in,        Vector       &d_in,
@@ -569,25 +567,23 @@ public:
             if (pdf == 0)
                 return 0;
         } else {
-            /* Only consider nonzero throughput channels */
-            int i = throughput.sampleNonZeroChannelUniform(sampler);
+            Spectrum channelProb;
+            int i = throughput.sampleWeightedChannel(sampler, &channelProb);
             const void *myExtraParams = getIndividualExtraParams(extraParams, i);
-            pdf = m_dipoles[i]->sampleDirectionDipole(
+            pdf = channelProb[i] * m_dipoles[i]->sampleDirectionDipole(
                     n_in, d_in, n_out, d_out, R,
                     myExtraParams, m_dipConf, sampler);
             if (pdf == 0)
                 return 0;
-            int N = 1; // number of nonzero throughput channels
+
             for (int j = 0; j < SPECTRUM_SAMPLES; j++) {
-                if (j == i || throughput[j] == 0)
+                if (j == i || channelProb[j] == 0)
                     continue;
                 const void *myExtraParams = getIndividualExtraParams(extraParams, j);
-                pdf += m_dipoles[j]->pdfDirectionDipole(
+                pdf += channelProb[j] * m_dipoles[j]->pdfDirectionDipole(
                         n_in, d_in, n_out, d_out, R,
                         myExtraParams, m_dipConf);
-                N++;
             }
-            pdf /= N;
         }
         Assert(dot(d_in, n_in) <= Epsilon);
         its_in.wi = its_in.toLocal(d_in);
@@ -613,19 +609,16 @@ public:
             return m_dipoles[0]->pdfDirectionDipole(
                     n_in, d_in, n_out, d_out, R, extraParams, m_dipConf);
         } else {
+            Spectrum channelProb = throughput.probWeightedChannel();
             Float pdf = 0;
-            int N = 0; // number of nonzero-throughput channels
             for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
-                if (throughput[i] == 0)
+                if (channelProb[i] == 0)
                     continue;
                 const void *myExtraParams = getIndividualExtraParams(extraParams, i);
-                pdf += m_dipoles[i]->pdfDirectionDipole(
+                pdf += channelProb[i] * m_dipoles[i]->pdfDirectionDipole(
                         n_in, d_in, n_out, d_out, R,
                         myExtraParams, m_dipConf);
-                N++;
             }
-            if (N > 0)
-                pdf /= N;
             return pdf;
         }
     }

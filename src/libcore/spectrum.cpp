@@ -472,16 +472,17 @@ int Spectrum::sampleWeightedChannel(Sampler *sampler, Spectrum *probDistPtr) con
     Spectrum probDist;
     if (isZero()) {
         channel = sampler->next1D() * SPECTRUM_SAMPLES;
-        probDist = Spectrum(0.0f);
+        probDist = Spectrum(1.0f / SPECTRUM_SAMPLES);
     } else {
-        Float theSum = sumOfAbs();
+        Spectrum weights = abs();
+        Float theSum = weights.sum();
         Float x = sampler->next1D() * theSum;
         Float cumsum = 0;
         for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
-            cumsum += math::abs(s[i]);
+            cumsum += weights[i];
             if (cumsum >= x) {
                 channel = i;
-                probDist = *this / theSum;
+                probDist = weights / theSum;
                 break;
             }
         }
@@ -491,6 +492,15 @@ int Spectrum::sampleWeightedChannel(Sampler *sampler, Spectrum *probDistPtr) con
     if (probDistPtr)
         *probDistPtr = probDist;
     return channel;
+}
+
+Spectrum Spectrum::probWeightedChannel() const {
+    if (isZero()) {
+        return Spectrum(1.0f / SPECTRUM_SAMPLES);
+    } else {
+        Spectrum weights = abs();
+        return weights / weights.sum();
+    }
 }
 
 std::string Spectrum::toString() const {
