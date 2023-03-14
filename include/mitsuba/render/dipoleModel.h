@@ -137,6 +137,8 @@ public:
                 m_sigS(sigS), m_sigA(sigA), m_g(g), m_eta(eta) {
         if (g < -1 || g > 1)
             Log(EError, "Invalid value for g: %f, should be in (-1,1)", m_g);
+
+        m_monopoleWeightCutoff = props.getFloat("monopoleWeightCutoff", 0.01);
     }
 
     DipoleModel(Stream *stream, InstanceManager *manager) :
@@ -146,6 +148,7 @@ public:
         m_sigA = stream->readFloat();
         m_g = stream->readFloat();
         m_eta = stream->readFloat();
+        m_monopoleWeightCutoff = stream->readFloat();
     }
 
     void serialize(Stream *stream, InstanceManager *manger) const {
@@ -153,6 +156,7 @@ public:
         stream->writeFloat(m_sigA);
         stream->writeFloat(m_g);
         stream->writeFloat(m_eta);
+        stream->writeFloat(m_monopoleWeightCutoff);
     }
 
     virtual Float evalMonopole(const Monopole &m) const = 0;
@@ -175,20 +179,20 @@ public:
 
     virtual Float pdfDirectionMonopole(const Monopole &m) const = 0;
 
-    /** Relative weight of real vs virtual source, marginalized over 
+    /** Weight (unnormalized) of this monopole, marginalized over 
      * extraParams and incoming directions */
-    virtual Float realSourceWeight_margOverParamsAndDirections(
-            const Monopole &real, const Monopole &virt) const = 0;
+    virtual Float monopoleWeight_margOverParamsAndDirections(
+            const Monopole &m) const = 0;
 
-    /** Relative weight of real vs virtual source, marginalized over 
+    /** Weight (unnormalized) of this monopole, marginalized over 
      * extraParams */
-    virtual Float realSourceWeight_margOverParams(
-            const Monopole &real, const Monopole &virt) const = 0;
+    virtual Float monopoleWeight_margOverParams(
+            const Monopole &m) const = 0;
 
-    /** Relative weight of real vs virtual source, marginalized over 
+    /** Weight (unnormalized) of this monopole, marginalized over 
      * incoming directions */
-    virtual Float realSourceWeight_margOverDirections(
-            const Monopole &real, const Monopole &virt) const = 0;
+    virtual Float monopoleWeight_margOverDirections(
+            const Monopole &m) const = 0;
 
 
 
@@ -250,12 +254,57 @@ protected:
     bool shouldRejectRealDin(
             const DipoleConfig &dipConf, const Monopole &r) const;
 
+    /** Relative weight of real vs virtual source, marginalized over 
+     * extraParams and incoming directions */
+    virtual Float realSourceWeight_margOverParamsAndDirections(
+            const Monopole &real, const Monopole &virt) const {
+        Float w_real = monopoleWeight_margOverParamsAndDirections(real);
+        Float w_virt = monopoleWeight_margOverParamsAndDirections(virt);
+        Assert(w_real >= 0);
+        Assert(w_virt >= 0);
+        if ((w_real + w_virt) == 0)
+            return 0.5;
+        return math::clamp(w_real / (w_real + w_virt),
+                m_monopoleWeightCutoff, 1 - m_monopoleWeightCutoff);
+    };
+
+    /** Relative weight of real vs virtual source, marginalized over 
+     * extraParams */
+    virtual Float realSourceWeight_margOverParams(
+            const Monopole &real, const Monopole &virt) const {
+        Float w_real = monopoleWeight_margOverParams(real);
+        Float w_virt = monopoleWeight_margOverParams(virt);
+        Assert(w_real >= 0);
+        Assert(w_virt >= 0);
+        if ((w_real + w_virt) == 0)
+            return 0.5;
+        return math::clamp(w_real / (w_real + w_virt),
+                m_monopoleWeightCutoff, 1 - m_monopoleWeightCutoff);
+    };
+
+    /** Relative weight of real vs virtual source, marginalized over 
+     * incoming directions */
+    virtual Float realSourceWeight_margOverDirections(
+            const Monopole &real, const Monopole &virt) const {
+        Float w_real = monopoleWeight_margOverDirections(real);
+        Float w_virt = monopoleWeight_margOverDirections(virt);
+        Assert(w_real >= 0);
+        Assert(w_virt >= 0);
+        if ((w_real + w_virt) == 0)
+            return 0.5;
+        return math::clamp(w_real / (w_real + w_virt),
+                m_monopoleWeightCutoff, 1 - m_monopoleWeightCutoff);
+    };
+
+
     /* Params to calculate dipole parameters (Note: can also demand a fixed 
      * dipoleConfig and cache e.g. zv...) */
     Float m_sigS; /// sigma_s
     Float m_sigA; /// sigma_a
     Float m_g;
     Float m_eta;
+
+    Float m_monopoleWeightCutoff; /// Lower bound for monopole sampling weight
 };
 
 

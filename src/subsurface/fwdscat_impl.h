@@ -211,6 +211,40 @@ FS_INLINE Float FwdScat::evalMonopole(Vector u0, Vector uL, Vector R, Float leng
     return G;
 }
 
+FS_INLINE Float FwdScat::evalIsotropicPointSource(Vector uL, Vector R, Float length) const {
+    FSAssert(math::abs(uL.length() - 1) < 1e-6);
+
+    if (length < 0)
+        return 0;
+
+    double C, D, E, F;
+    calcValues(length, C, D, E, F);
+
+    Vector3d H = E*Vector3d(R) - D*Vector3d(uL);
+    double lHl = H.length();
+    lHl = (lHl > 1./m_direction_min_mu) ? 1./m_direction_min_mu : lHl;
+
+    double N = absorptionAndNormalizationConstant(length);
+    // additional factor: (e^H - e^-H) / 2H
+    // -> put the e^H together in the overall exp to avoid overflows
+    // remaining factor: (1 - e^(-2H)) / 2H
+    double factor;
+    if (lHl < 0.0001) {
+        factor = 1 - lHl + 2*lHl*lHl/3 - lHl*lHl*lHl/3;
+    } else {
+        factor = (1 - exp(-2*lHl)) / (2*lHl);
+    }
+    double G = N * factor * exp(-C + E*dot(R,uL) - F*R.lengthSquared() + lHl);
+
+    if (!std::isfinite(G) || G < 0) {
+#ifdef MTS_FWDSCAT_DEBUG
+        Log(EWarn, "Invalid G in evalIsotropicPointSource(): %e", G);
+#endif
+        return 0;
+    }
+    return G;
+}
+
 FS_INLINE Float FwdScat::evalPlaneSource(Vector u0, Vector uL,
         Vector n, Float Rz, Float length) const {
     FSAssert(math::abs(u0.length() - 1) < 1e-6);

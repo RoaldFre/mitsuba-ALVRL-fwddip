@@ -26,6 +26,8 @@ public:
 #endif
         }
 
+        m_exactMargOverDirectionWeight = props.getBoolean("exactMargOverDirectionWeight", true);
+
         m_debug_override_ps = props.getFloat("debug_override_ps", -1);
         m_debug_uniform_ps_min = props.getFloat("debug_uniform_ps_min", -1);
         m_debug_uniform_ps_max = props.getFloat("debug_uniform_ps_max", -1);
@@ -46,6 +48,7 @@ public:
             DipoleModel(stream, manager),
             p(stream->readFloat()) {
         m_direction_min_mu = stream->readFloat();
+        m_exactMargOverDirectionWeight = stream->readBool();
         m_debug_override_ps = stream->readFloat();
         m_debug_uniform_ps_min = stream->readFloat();
         m_debug_uniform_ps_max = stream->readFloat();
@@ -58,6 +61,7 @@ public:
         DipoleModel::serialize(stream, manager);
         stream->writeFloat(p);
         stream->writeFloat(m_direction_min_mu);
+        stream->writeBool(m_exactMargOverDirectionWeight);
         stream->writeFloat(m_debug_override_ps);
         stream->writeFloat(m_debug_uniform_ps_min);
         stream->writeFloat(m_debug_uniform_ps_max);
@@ -72,6 +76,7 @@ public:
                 <<", p="<<p
                 <<", minMu="<<m_direction_min_mu
                 <<", eta="<<m_eta
+                <<", exactMargOverDirectionWeight="<<m_exactMargOverDirectionWeight
                 <<", bidirRayDirSurfSamp="<<m_bidirectionalRayDirSurfSampler
                 <<"]";
         return oss.str();
@@ -92,6 +97,8 @@ public:
 
     Float evalMonopole(Vector u0, Vector uL, Vector R, Float length) const;
 
+    Float evalIsotropicPointSource(Vector uL, Vector R, Float length) const;
+
     Float evalPlaneSource(Vector u0, Vector uL,
             Vector n, Float Rz, Float length) const;
 
@@ -105,19 +112,25 @@ public:
 
     virtual Float pdfDirectionMonopole(const Monopole &m) const;
 
-    virtual Float realSourceWeight_margOverParamsAndDirections(
-            const Monopole &real, const Monopole &virt) const {
-        return 0.5; // TODO
+    virtual Float monopoleWeight_margOverParamsAndDirections(
+            const Monopole &m) const {
+        return 1; // TODO
     }
 
-    virtual Float realSourceWeight_margOverParams(
-            const Monopole &real, const Monopole &virt) const {
-        return 0.5; // TODO
+    virtual Float monopoleWeight_margOverParams(
+            const Monopole &m) const {
+        return 1; // TODO
     }
 
-    virtual Float realSourceWeight_margOverDirections(
-            const Monopole &real, const Monopole &virt) const {
-        return 0.5; // TODO
+    virtual Float monopoleWeight_margOverDirections(
+            const Monopole &m) const {
+        if (!m_exactMargOverDirectionWeight)
+            return 1;
+
+        Float s = *(static_cast<const Float*>(m.extraParams));
+        /* Warning: this does not take into account any restriction to proper
+         * *incoming* directions wrt the incoming normal! */
+        return evalIsotropicPointSource(m.d_out, m.R, s);
     }
 
 
@@ -204,6 +217,8 @@ protected:
      * the calculation of the pdf during sampling.
      */
     float m_direction_min_mu;
+
+    bool m_exactMargOverDirectionWeight;
 
     Float m_debug_override_ps;
     Float m_debug_uniform_ps_min;
