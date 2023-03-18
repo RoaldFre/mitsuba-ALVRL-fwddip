@@ -614,7 +614,7 @@ FS_INLINE void FwdScat::implLengthShortLimitMargOverU0(
     const Float safetyWeight = 0.3;
     Float pdfOrig, pdfSafety;
     if (sampler) {
-        if (sampler->next1D() > safetyWeight) {
+        if (sampler->next1D() < safetyWeight) {
             implLengthShortLimitMargOverU0_internal(R, uL, s, sampler, &pdfSafety, safetyFac, isPlaneSource);
             implLengthShortLimitMargOverU0_internal(R, uL, s, NULL,    &pdfOrig,   1.0,       isPlaneSource);
         } else {
