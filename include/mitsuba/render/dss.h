@@ -958,6 +958,35 @@ public:
 
 
     /**
+     * Ugly workaround combined with pdfBssrdfDirection_forExtraTerm to add an
+     * additional term to the *overall* pdf(extraParams, directions), because we
+     * are limited by the factored nature of the (conditional) extraParams and
+     * directional pdfs. Useful for having an overall 'real vs virtual source'
+     * MIS combined pdf, for instance.
+     */
+    virtual Spectrum pdfExtraParams_forExtraTerm(const Scene *scene,
+            const Intersection &its_out, const Vector &d_out,
+            const Intersection &its_in,  const Vector *d_in,
+            const Spectrum &throughput, const void *extraParams) const {
+        return Spectrum(0.0f);
+    }
+
+    /**
+     * Ugly workaround combined with pdfExtraParams_forExtraTerm to add an
+     * additional term to the *overall* pdf(extraParams, directions). See
+     * pdfExtraParams_forExtraTerm for more info.
+     */
+    virtual Float pdfBssrdfDirection_forExtraTerm(const Scene *scene,
+            const Intersection &its_out, const Vector &d_out,
+            const Intersection &its_in,  const Vector &d_in,
+            const void *extraParams, const Spectrum &throughput) const {
+        return 0;
+    }
+
+
+
+
+    /**
      * \brief Sample the exitant radiance for a point on the surface.
      *
      * Currently not implemented (yet). [You should probably use Li() anyway.]
@@ -1110,6 +1139,16 @@ protected:
 
     /// pdf of \c sampleDirectionsFromBssrdf()
     Float pdfDirectionsFromBssrdf(
+            const Scene *scene,
+            const Intersection &its_out, const Vector &d_out,
+            const Intersection &its_in,  const Vector &d_in,
+            const Vector &rec_wi, EMeasure bsdfMeasure,
+            const Spectrum &throughput,
+            bool requestOutwardDirection,
+            const void *extraParams) const;
+
+    /// Hack, see pdfBssrdfDirection_forExtraTerm
+    Float pdfDirectionsFromBssrdf_forExtraTerm(
             const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector &d_in,

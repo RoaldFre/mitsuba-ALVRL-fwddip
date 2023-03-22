@@ -217,7 +217,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     /* Perform direct sampling of the light sources? */
     m_directSampling = props.getBoolean("directSampling", true);
 
-    /* Perform MIS weighting of regular sampilg and direct sampling of the
+    /* Perform MIS weighting of regular samplig and direct sampling of the
      * light sources? */
     m_directSamplingMIS = props.getBoolean("directSamplingMIS", true);
 
@@ -262,6 +262,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     m_onlyCollectClosestIntersections = props.getBoolean(
             "onlyCollectClosestIntersections", false);
 
+#if 0 // currently supported with quick and dirty direct sampling pdf set to 0
     if ((m_numSIRsurface > 1 || m_SIRnonSurfaceOversamplingFactor > 1)
             && !(m_directSampling && m_directSamplingMIS)) {
         Log(EError, "Implementation caveat: numSIRsurface or "
@@ -274,6 +275,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
         m_directSampling = true;
         m_directSamplingMIS = true;
     }
+#endif
 
     Log(EInfo, "DirectSamplingSubsurface settings: directSampling %d, "
             "MIS %d, singleChannel %d, allowIncomingOutgoingDirections %d, "
@@ -1214,6 +1216,35 @@ Float DirectSamplingSubsurface::pdfDirectionsFromBssrdf(
     return d_in_pdf * rec_wi_pdf;
 }
 
+// Duplicatation for extra term hack...
+Float DirectSamplingSubsurface::pdfDirectionsFromBssrdf_forExtraTerm(
+        const Scene *scene,
+        const Intersection &its_out, const Vector &d_out,
+        const Intersection &its_in,  const Vector &d_in,
+        const Vector &rec_wi,
+        EMeasure bsdfMeasure,
+        const Spectrum &throughput,
+        bool requestOutwardDirection,
+        const void *extraParams) const {
+    Assert(bsdfMeasure != EInvalidMeasure);
+    Assert(!((its_in.wi - its_in.toLocal(d_in)).length() > Epsilon));
+
+    BSDFSamplingRecord bRec(its_in, its_in.toLocal(d_in),
+            its_in.toLocal(rec_wi), ERadiance);
+    if (requestOutwardDirection && bRec.wo.z <= 0)
+        return 0;
+
+    Float d_in_pdf = pdfBssrdfDirection_forExtraTerm(
+            scene, its_out, d_out, its_in, d_in, extraParams, throughput);
+    if (d_in_pdf == 0)
+        return 0;
+
+    const BSDF *bsdf = its_in.getBSDF();
+    Float rec_wi_pdf = bsdf->pdf(bRec, bsdfMeasure);
+
+    return d_in_pdf * rec_wi_pdf;
+}
+
 /* Returns BSDF including BOTH COSINE FACTORS! */
 Spectrum DirectSamplingSubsurface::sampleDirectionsDirect(
         const Scene *scene,
@@ -1352,6 +1383,9 @@ Spectrum DirectSamplingSubsurface::sampleDirect(
         Vector &d_in, Vector &rec_wi, void *extraParams,
         EMeasure &bsdfMeasure, EMeasure &lightSamplingMeasure,
         Spectrum &bsdfValWithCosines, Spectrum &LiDirect) const {
+    if (!m_directSampling)
+        return Spectrum(0.0f);
+
     Spectrum pdf_d_in_and_rec_wi;
 
     /* Sample incoming directions d_in&rec_wi based on its_in */
@@ -1374,12 +1408,17 @@ Spectrum DirectSamplingSubsurface::sampleDirect(
     Float d_in_cosine = dot(d_in, n_in);
     Assert(MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR || d_in_cosine <= 0);
 
-    Spectrum thePdf = pdf_d_in_and_rec_wi * extraParamsPdf;
+    // Hacky additional term if needed
+    Spectrum extraParamsPdf_extra = pdfExtraParams_forExtraTerm(
+            scene, its_out, d_out, its_in, &d_in, effectiveThroughput,
+            extraParams);
+
+    Spectrum thePdf = pdf_d_in_and_rec_wi * (extraParamsPdf + extraParamsPdf_extra);
 
     if (!check_pdf_consistency("sampleDirect", thePdf,
                 pdfDirect(scene, its_in, its_out, d_out, effectiveThroughput,
                 d_in, rec_wi, extraParams, bsdfMeasure)))
-        return Spectrum(0.f);
+        return Spectrum(0.0f);
 
     return thePdf;
 }
@@ -1390,6 +1429,9 @@ Spectrum DirectSamplingSubsurface::pdfDirect(const Scene *scene,
         const Spectrum &effectiveThroughput,
         const Vector &d_in, const Vector &rec_wi, const void *extraParams,
         EMeasure bsdfMeasure) const {
+    if (!m_directSampling)
+        return Spectrum(0.0f);
+
     Assert(bsdfMeasure != EInvalidMeasure);
     Spectrum pdf_d_in_and_rec_wi = pdfDirectionsDirect(
             scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure);
@@ -1400,7 +1442,12 @@ Spectrum DirectSamplingSubsurface::pdfDirect(const Scene *scene,
             scene, its_out, d_out, its_in, &d_in, effectiveThroughput,
             extraParams);
 
-    return pdf_d_in_and_rec_wi * extraParamsPdf;
+    // Hacky additional term if needed
+    Spectrum extraParamsPdf_extra = pdfExtraParams_forExtraTerm(
+            scene, its_out, d_out, its_in, &d_in, effectiveThroughput,
+            extraParams);
+
+    return pdf_d_in_and_rec_wi * (extraParamsPdf + extraParamsPdf_extra);
 }
 
 
@@ -1436,7 +1483,18 @@ Spectrum DirectSamplingSubsurface::sampleIndirect(
     Float d_in_cosine = dot(d_in, n_in);
     Assert(MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR || d_in_cosine <= 0);
 
-    Spectrum thePdf = pdf_d_in_and_rec_wi * extraParamsPdf;
+
+    // Hacky additional term if needed
+    Spectrum extraParamsPdf_extra = pdfExtraParams_forExtraTerm(
+            scene, its_out, d_out, its_in, NULL, effectiveThroughput,
+            extraParams);
+    Float pdf_d_in_and_rec_wi_extra = pdfDirectionsFromBssrdf_forExtraTerm(
+            scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
+            effectiveThroughput * extraParamsPdf.zeroMask(),
+            requestOutwardDirection, extraParams);
+
+    Spectrum thePdf = pdf_d_in_and_rec_wi * extraParamsPdf
+            + pdf_d_in_and_rec_wi_extra * extraParamsPdf_extra;
 
     if (!check_pdf_consistency("sampleIndirect", thePdf,
                     pdfIndirect(scene, its_in, its_out, d_out,
@@ -1470,7 +1528,17 @@ Spectrum DirectSamplingSubsurface::pdfIndirect(const Scene *scene,
             effectiveThroughput * extraParamsPdf.zeroMask(),
             requestOutwardDirection, extraParams);
 
-    return pdf_d_in_and_rec_wi * extraParamsPdf;
+    // Hacky additional term if needed
+    Spectrum extraParamsPdf_extra = pdfExtraParams_forExtraTerm(
+            scene, its_out, d_out, its_in, NULL, effectiveThroughput,
+            extraParams);
+    Float pdf_d_in_and_rec_wi_extra = pdfDirectionsFromBssrdf_forExtraTerm(
+            scene, its_out, d_out, its_in, d_in, rec_wi, bsdfMeasure,
+            effectiveThroughput * extraParamsPdf.zeroMask(),
+            requestOutwardDirection, extraParams);
+
+    return pdf_d_in_and_rec_wi * extraParamsPdf
+            + pdf_d_in_and_rec_wi_extra * extraParamsPdf_extra;
 }
 
 
@@ -2366,7 +2434,7 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
          * typically cheaper, so we can afford more SIR samples there */
         for (size_t j = 0; j < SIRnonSurfaceOversamplingFactor; j++) {
             do {
-                Assert(m_directSampling && m_directSamplingMIS);
+                //Assert(m_directSampling && m_directSamplingMIS);
 
                 /* DIRECT SAMPLING */
 

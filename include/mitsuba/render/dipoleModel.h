@@ -139,6 +139,8 @@ public:
             Log(EError, "Invalid value for g: %f, should be in (-1,1)", m_g);
 
         m_monopoleWeightCutoff = props.getFloat("monopoleWeightCutoff", 0.01);
+        if (m_monopoleWeightCutoff < 0 || m_monopoleWeightCutoff > 0.5)
+            Log(EError, "Invalid value for monopoleWeightCutoff: %f, should be in [0,0.5]", m_monopoleWeightCutoff);
     }
 
     DipoleModel(Stream *stream, InstanceManager *manager) :
@@ -340,6 +342,11 @@ public:
         }
 
         m_dirHemiWeight = m_dipoles[0]->getRequestedDirectionalCosineHemisphereWeight();
+        m_sampleRealVirtOverall = props.getBoolean("sampleRealVirtOverall", false);
+        m_overallRealSourceWeight = props.getFloat("overallRealSourceWeight", 0.8);
+
+        Log(EInfo, "DipoleDSS settings: m_dirHemiWeight %f, m_sampleRealVirtOverall %d, m_overallRealSourceWeight %f",
+                m_dirHemiWeight, m_sampleRealVirtOverall, m_overallRealSourceWeight);
     }
 
     DipoleDSS(Stream *stream, InstanceManager *manager) : 
@@ -355,6 +362,8 @@ public:
         }
 
         m_dirHemiWeight = stream->readFloat();
+        m_sampleRealVirtOverall = stream->readBool();
+        m_overallRealSourceWeight = stream->readFloat();
 
         configure();
     }
@@ -371,6 +380,8 @@ public:
         }
 
         stream->writeFloat(m_dirHemiWeight);
+        stream->writeBool(m_sampleRealVirtOverall);
+        stream->writeFloat(m_overallRealSourceWeight);
     }
 
     /** 
@@ -380,7 +391,16 @@ public:
      *        bool isValid; // Was the sampling of these parameters successful?
      *    };
      * There is one such packet for each spectral channel.
+     *
+     * At the very end, after all these packets, there is a
+     * OverallRealVirtParams entry that is used for bookkeeping if
+     * m_sampleRealVirtOverall is active.
      */
+    struct OverallRealVirtParams {
+        DipoleMode sampledMode; /// Mode (real or virtual) of the sampled component
+        Float sampledProb; /// Probability of the sampled component, gets accounted for in the extraParams sampler
+    };
+
     inline size_t individualExtraParamSize() const {
         return m_dipoles[0]->extraParamsSize();
     }
@@ -388,7 +408,7 @@ public:
         return individualExtraParamSize() + sizeof(bool);
     }
     inline size_t extraParamsSize() const {
-        return SPECTRUM_SAMPLES * extraParamsPacketSize();
+        return SPECTRUM_SAMPLES * extraParamsPacketSize() + sizeof(OverallRealVirtParams);
     }
     /// const version
     inline const void *getIndividualExtraParams(const void *extraParams, int i) const {
@@ -407,6 +427,37 @@ public:
         char *packet = static_cast<char*>(extraParams)
                     + i*extraParamsPacketSize();
         *reinterpret_cast<bool*>(packet + individualExtraParamSize()) = isValid;
+    }
+
+    inline DipoleMode getOverallDipoleMode(const void *extraParams) const {
+        Assert(m_sampleRealVirtOverall);
+        const char *ptr = static_cast<const char*>(extraParams)
+                    + SPECTRUM_SAMPLES*extraParamsPacketSize();
+        DipoleMode dipMode = reinterpret_cast<const OverallRealVirtParams*>(ptr)->sampledMode;
+        Assert(dipMode == EReal || dipMode == EVirt);
+        return dipMode;
+    }
+    inline void setOverallDipoleMode(void *extraParams, DipoleMode dipMode) const {
+        Assert(m_sampleRealVirtOverall);
+        Assert(dipMode == EReal || dipMode == EVirt);
+        char *ptr = static_cast<char*>(extraParams)
+                    + SPECTRUM_SAMPLES*extraParamsPacketSize();
+        reinterpret_cast<OverallRealVirtParams*>(ptr)->sampledMode = dipMode;
+    }
+    inline Float getOverallDipoleModeProb(const void *extraParams) const {
+        Assert(m_sampleRealVirtOverall);
+        const char *ptr = static_cast<const char*>(extraParams)
+                    + SPECTRUM_SAMPLES*extraParamsPacketSize();
+        Float prob = reinterpret_cast<const OverallRealVirtParams*>(ptr)->sampledProb;
+        Assert(prob > 0 && prob <= 1);
+        return prob;
+    }
+    inline void setOverallDipoleModeProb(void *extraParams, Float prob) const {
+        Assert(m_sampleRealVirtOverall);
+        Assert(prob > 0 && prob <= 1);
+        char *ptr = static_cast<char*>(extraParams)
+                    + SPECTRUM_SAMPLES*extraParamsPacketSize();
+        reinterpret_cast<OverallRealVirtParams*>(ptr)->sampledProb = prob;
     }
 
 
@@ -441,6 +492,31 @@ public:
             const Intersection &its_in,  const Vector *d_in,
             const Spectrum &throughput, void *extraParams,
             Sampler *sampler) const {
+        if (!m_sampleRealVirtOverall || m_dipConf.dipoleMode != ERealAndVirt)
+            return sampleExtraParams(scene, its_out, d_out, its_in, d_in, throughput, extraParams, sampler, m_dipConf);
+
+        /* Top level, overall choice of real vs virtual source, that persists
+         * for the direction sampling; MIS on this top level instead of in the
+         * conditional sub-pdfs */
+        DipoleConfig dipConf(m_dipConf);
+        Float prob;
+        if (sampler->next1D() < m_overallRealSourceWeight) {
+            dipConf.dipoleMode = EReal;
+            prob = m_overallRealSourceWeight;
+        } else {
+            dipConf.dipoleMode = EVirt;
+            prob = 1 - m_overallRealSourceWeight;
+        }
+        setOverallDipoleModeProb(extraParams, prob);
+        setOverallDipoleMode(extraParams, dipConf.dipoleMode);
+        return prob * sampleExtraParams(scene, its_out, d_out, its_in, d_in, throughput, extraParams, sampler, dipConf);
+        // The complementary term gets added by pdfExtraParams_forExtraTerm
+    }
+    inline virtual Spectrum sampleExtraParams(const Scene *scene,
+            const Intersection &its_out, const Vector &d_out,
+            const Intersection &its_in,  const Vector *d_in,
+            const Spectrum &throughput, void *extraParams,
+            Sampler *sampler, const DipoleConfig &dipConf) const {
         Vector n_in = its_in.shFrame.n;
         Vector n_out = its_out.shFrame.n;
         Point p_in = its_in.p;
@@ -448,15 +524,15 @@ public:
         Vector R = p_out - p_in;
         Assert(dot(d_out, n_out) >= -Epsilon);
         Assert(!d_in || dot(*d_in, n_in) <= Epsilon);
-        Assert(!m_dipConf.useEffectiveBRDF || n_in == n_out);
-        Assert(!m_dipConf.useEffectiveBRDF || p_in == p_out);
+        Assert(!dipConf.useEffectiveBRDF || n_in == n_out);
+        Assert(!dipConf.useEffectiveBRDF || p_in == p_out);
         Assert(!throughput.isZero());
 
         Spectrum pdf;
         if (m_dipoles.size() == 1) {
             Assert(throughput[0] != 0);
             pdf = Spectrum(m_dipoles[0]->sampleExtraParamsDipole(
-                    n_in, d_in, n_out, d_out, R, extraParams, m_dipConf, sampler));
+                    n_in, d_in, n_out, d_out, R, extraParams, dipConf, sampler));
             setValidExtraParam(extraParams, 0, pdf[0] != 0);
         } else {
             for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
@@ -465,7 +541,7 @@ public:
                 } else {
                     void *myExtraParams = getIndividualExtraParams(extraParams, i);
                     pdf[i] = m_dipoles[i]->sampleExtraParamsDipole(
-                            n_in, d_in, n_out, d_out, R, myExtraParams, m_dipConf, sampler);
+                            n_in, d_in, n_out, d_out, R, myExtraParams, dipConf, sampler);
                 }
                 setValidExtraParam(extraParams, i, pdf[i] != 0);
             }
@@ -489,6 +565,19 @@ public:
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector *d_in,
             const Spectrum &throughput, const void *extraParams) const {
+        if (!m_sampleRealVirtOverall || m_dipConf.dipoleMode != ERealAndVirt)
+            return pdfExtraParams(scene, its_out, d_out, its_in, d_in, throughput, extraParams, m_dipConf);
+
+        DipoleConfig dipConf(m_dipConf);
+        dipConf.dipoleMode = getOverallDipoleMode(extraParams);
+        return getOverallDipoleModeProb(extraParams)
+                * pdfExtraParams(scene, its_out, d_out, its_in, d_in, throughput, extraParams, dipConf);
+    }
+    Spectrum pdfExtraParams(const Scene *scene,
+            const Intersection &its_out, const Vector &d_out,
+            const Intersection &its_in,  const Vector *d_in,
+            const Spectrum &throughput, const void *extraParams,
+            const DipoleConfig &dipConf) const {
         Vector n_in = its_in.shFrame.n;
         Vector n_out = its_out.shFrame.n;
         Point p_in = its_in.p;
@@ -503,7 +592,7 @@ public:
         if (m_dipoles.size() == 1) {
             Assert(throughput[0] != 0);
             pdf = Spectrum(m_dipoles[0]->pdfExtraParamsDipole(
-                    n_in, d_in, n_out, d_out, R, extraParams, m_dipConf));
+                    n_in, d_in, n_out, d_out, R, extraParams, dipConf));
         } else {
             for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
                 if (throughput[i] == 0) {
@@ -511,24 +600,55 @@ public:
                 } else {
                     const void *myExtraParams = getIndividualExtraParams(extraParams, i);
                     pdf[i] = m_dipoles[i]->pdfExtraParamsDipole(
-                            n_in, d_in, n_out, d_out, R, myExtraParams, m_dipConf);
+                            n_in, d_in, n_out, d_out, R, myExtraParams, dipConf);
                 }
             }
         }
         return pdf;
     }
 
+    Spectrum pdfExtraParams_forExtraTerm(const Scene *scene,
+            const Intersection &its_out, const Vector &d_out,
+            const Intersection &its_in,  const Vector *d_in,
+            const Spectrum &throughput, const void *extraParams) const {
+
+        if (!m_sampleRealVirtOverall || m_dipConf.dipoleMode != ERealAndVirt)
+            return Spectrum(0.0f);
+
+        DipoleConfig dipConf(m_dipConf);
+        if (getOverallDipoleMode(extraParams) == EReal) {
+            dipConf.dipoleMode = EVirt;
+        } else {
+            dipConf.dipoleMode = EReal;
+        }
+        return (1 - getOverallDipoleModeProb(extraParams))
+                * pdfExtraParams(scene, its_out, d_out, its_in, d_in, throughput, extraParams, dipConf);
+    }
 
 
-
-    /**
-     * MIS weighting of importance sampling the transport and sampling the
-     * (cosine) hemisphere */
+    // wrapper for m_sampleRealVirtOverall
     virtual Float sampleBssrdfDirection(const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             Intersection &its_in,        Vector       &d_in,
             const void *extraParams, const Spectrum &throughput,
             Sampler *sampler) const {
+        if (!m_sampleRealVirtOverall || m_dipConf.dipoleMode != ERealAndVirt)
+            return sampleBssrdfDirection(scene, its_out, d_out, its_in, d_in, extraParams, throughput, sampler, m_dipConf);
+
+        // Use the same dipole mode that was sampled when the extraParams were sampled
+        DipoleConfig dipConf(m_dipConf);
+        dipConf.dipoleMode = getOverallDipoleMode(extraParams);
+        return sampleBssrdfDirection(scene, its_out, d_out, its_in, d_in, extraParams, throughput, sampler, dipConf);
+        // The complementary term gets added by pdfBssrdfDirection_forExtraTerm
+    }
+    /**
+     * MIS weighting of importance sampling the transport and sampling the
+     * (cosine) hemisphere */
+    Float sampleBssrdfDirection(const Scene *scene,
+            const Intersection &its_out, const Vector &d_out,
+            Intersection &its_in,        Vector       &d_in,
+            const void *extraParams, const Spectrum &throughput,
+            Sampler *sampler, const DipoleConfig &dipConf) const {
         Assert(m_dirHemiWeight >= 0 && m_dirHemiWeight <= 1);
 
         Float pdfHemi, pdfImp;
@@ -541,10 +661,10 @@ public:
             if (m_dirHemiWeight == 1)
                 return pdfHemi;
             pdfImp = pdfDirectionImportance(
-                    scene, its_out, d_out, its_in, d_in, extraParams, throughput);
+                    scene, its_out, d_out, its_in, d_in, extraParams, throughput, dipConf);
         } else {
             pdfImp = sampleDirectionImportance(
-                    scene, its_out, d_out, its_in, d_in, extraParams, throughput, sampler);
+                    scene, its_out, d_out, its_in, d_in, extraParams, throughput, sampler, dipConf);
             if (pdfImp == 0)
                 return 0;
             pdfHemi = DirectSamplingSubsurface::pdfBssrdfDirection(
@@ -569,6 +689,18 @@ public:
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector &d_in,
             const void *extraParams, const Spectrum &throughput) const {
+        if (!m_sampleRealVirtOverall || m_dipConf.dipoleMode != ERealAndVirt)
+            return pdfBssrdfDirection(scene, its_out, d_out, its_in, d_in, extraParams, throughput, m_dipConf);
+
+        DipoleConfig dipConf(m_dipConf);
+        dipConf.dipoleMode = getOverallDipoleMode(extraParams);
+        return pdfBssrdfDirection(scene, its_out, d_out, its_in, d_in, extraParams, throughput, dipConf);
+    }
+    Float pdfBssrdfDirection(const Scene *scene,
+            const Intersection &its_out, const Vector &d_out,
+            const Intersection &its_in,  const Vector &d_in,
+            const void *extraParams, const Spectrum &throughput,
+            const DipoleConfig &dipConf) const {
         Assert(m_dirHemiWeight >= 0 && m_dirHemiWeight <= 1);
 
 #if !MTS_DSS_ALLOW_INTERNAL_INCOMING_DIR
@@ -583,8 +715,23 @@ public:
             return pdf;
         pdf += (1 - m_dirHemiWeight)
                 * pdfDirectionImportance(
-                    scene, its_out, d_out, its_in, d_in, extraParams, throughput);
+                    scene, its_out, d_out, its_in, d_in, extraParams, throughput, dipConf);
         return pdf;
+    }
+    virtual Float pdfBssrdfDirection_forExtraTerm(const Scene *scene,
+            const Intersection &its_out, const Vector &d_out,
+            const Intersection &its_in,  const Vector &d_in,
+            const void *extraParams, const Spectrum &throughput) const {
+        if (!m_sampleRealVirtOverall || m_dipConf.dipoleMode != ERealAndVirt)
+            return 0;
+
+        DipoleConfig dipConf(m_dipConf);
+        if (getOverallDipoleMode(extraParams) == EReal) {
+            dipConf.dipoleMode = EVirt;
+        } else {
+            dipConf.dipoleMode = EReal;
+        }
+        return pdfBssrdfDirection(scene, its_out, d_out, its_in, d_in, extraParams, throughput, dipConf);
     }
 
 
@@ -597,22 +744,22 @@ public:
             const Intersection &its_out, const Vector &d_out,
             Intersection &its_in,        Vector       &d_in,
             const void *extraParams, const Spectrum &throughput,
-            Sampler *sampler) const {
+            Sampler *sampler, const DipoleConfig &dipConf) const {
         Vector n_in = its_in.shFrame.n;
         Vector n_out = its_out.shFrame.n;
         Point p_in = its_in.p;
         Point p_out = its_out.p;
         Vector R = p_out - p_in;
         Assert(dot(d_out, n_out) >= -Epsilon);
-        Assert(!m_dipConf.useEffectiveBRDF || n_in == n_out);
-        Assert(!m_dipConf.useEffectiveBRDF || p_in == p_out);
+        Assert(!dipConf.useEffectiveBRDF || n_in == n_out);
+        Assert(!dipConf.useEffectiveBRDF || p_in == p_out);
         Assert(!throughput.isZero());
 
         Float pdf;
         if (m_dipoles.size() == 1) {
             pdf = m_dipoles[0]->sampleDirectionDipole(
                     n_in, d_in, n_out, d_out, R,
-                    extraParams, m_dipConf, sampler);
+                    extraParams, dipConf, sampler);
             if (pdf == 0)
                 return 0;
         } else {
@@ -621,7 +768,7 @@ public:
             const void *myExtraParams = getIndividualExtraParams(extraParams, i);
             pdf = channelProb[i] * m_dipoles[i]->sampleDirectionDipole(
                     n_in, d_in, n_out, d_out, R,
-                    myExtraParams, m_dipConf, sampler);
+                    myExtraParams, dipConf, sampler);
             if (pdf == 0)
                 return 0;
 
@@ -631,7 +778,7 @@ public:
                 const void *myExtraParams = getIndividualExtraParams(extraParams, j);
                 pdf += channelProb[j] * m_dipoles[j]->pdfDirectionDipole(
                         n_in, d_in, n_out, d_out, R,
-                        myExtraParams, m_dipConf);
+                        myExtraParams, dipConf);
             }
         }
         Assert(dot(d_in, n_in) <= Epsilon);
@@ -642,7 +789,8 @@ public:
     virtual Float pdfDirectionImportance(const Scene *scene,
             const Intersection &its_out, const Vector &d_out,
             const Intersection &its_in,  const Vector &d_in,
-            const void *extraParams, const Spectrum &throughput) const {
+            const void *extraParams, const Spectrum &throughput,
+            const DipoleConfig &dipConf) const {
         Vector n_in = its_in.shFrame.n;
         Vector n_out = its_out.shFrame.n;
         Point p_in = its_in.p;
@@ -650,13 +798,13 @@ public:
         Vector R = p_out - p_in;
         Assert(dot(d_out, n_out) >= -Epsilon);
         Assert(dot(d_in, n_in) <= Epsilon);
-        Assert(!m_dipConf.useEffectiveBRDF || n_in == n_out);
-        Assert(!m_dipConf.useEffectiveBRDF || p_in == p_out);
+        Assert(!dipConf.useEffectiveBRDF || n_in == n_out);
+        Assert(!dipConf.useEffectiveBRDF || p_in == p_out);
         Assert(!throughput.isZero());
 
         if (m_dipoles.size() == 1) {
             return m_dipoles[0]->pdfDirectionDipole(
-                    n_in, d_in, n_out, d_out, R, extraParams, m_dipConf);
+                    n_in, d_in, n_out, d_out, R, extraParams, dipConf);
         } else {
             Spectrum channelProb = throughput.probWeightedChannel();
             Float pdf = 0;
@@ -666,7 +814,7 @@ public:
                 const void *myExtraParams = getIndividualExtraParams(extraParams, i);
                 pdf += channelProb[i] * m_dipoles[i]->pdfDirectionDipole(
                         n_in, d_in, n_out, d_out, R,
-                        myExtraParams, m_dipConf);
+                        myExtraParams, dipConf);
             }
             return pdf;
         }
@@ -678,6 +826,8 @@ protected:
     DipoleConfig m_dipConf;
     ref_vector<DipMod> m_dipoles;
     Float m_dirHemiWeight;
+    bool m_sampleRealVirtOverall; /// Choose between real or virtual source once at the start of sampling, does not use monopoleWeight_margOver[Directions][Params]
+    Float m_overallRealSourceWeight; /// Weight for real source if m_sampleRealVirtOverall is active, TODO use monopoleWeight_margOverParamsAndDirections if we have proper estimate
 
     // Added for convenience, e.g. for use in configure():
     Spectrum m_sigmaS;
