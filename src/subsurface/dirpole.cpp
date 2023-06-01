@@ -140,6 +140,9 @@ public:
     }
 
     void configure() {
+        if (getNumSamplers() > 0)
+            return; // Already configured!
+
         // setup some constants
         sigma_t = m_sigmaS + m_sigmaA;
         sigma_sp = m_sigmaS * (Spectrum(1.0f) - m_g);

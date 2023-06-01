@@ -960,6 +960,9 @@ typedef DipoleDSS<FwdScat> FwdDip; // TODO can the documentation generation hand
 template <>
 void FwdDip::configure() {
 
+    if (getNumSamplers() > 0)
+        return; // Already configured!
+
     Spectrum sigmaSPrime = m_sigmaS * (Spectrum(1.0f) - m_g);
     Spectrum sigmaTPrime = sigmaSPrime + m_sigmaA;
     /* Effective transport extinction coefficient */

@@ -147,6 +147,10 @@ public:
     }
 
     void configure() {
+
+        if (getNumSamplers() > 0)
+            return; // Already configured!
+
         m_sigmaSPrime = m_sigmaS * (Spectrum(1.0f) - m_g);
         m_sigmaTPrime = m_sigmaSPrime + m_sigmaA;
 

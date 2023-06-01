@@ -1076,6 +1076,10 @@ protected:
         m_weights.normalize();
     }
 
+    size_t getNumSamplers() {
+        return m_surfaceSamplers.size();
+    }
+
 
     /**
      * Force single channel throughput if requested, returns the
