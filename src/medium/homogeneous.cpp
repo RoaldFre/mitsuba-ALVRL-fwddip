@@ -285,7 +285,7 @@ public:
         Float samplingDensity = m_samplingDensity;
 
         int sampledChannel = -1;
-        Spectrum channelProbs;
+        Spectrum channelProbs(1.0f / SPECTRUM_SAMPLES);
         if (rand < wgt) {
             rand /= wgt;
             if (m_strategy != EMaximum) {
@@ -309,13 +309,16 @@ public:
                 if (samplingDensity == 0)
                     sampledDistance = std::numeric_limits<Float>::infinity();
                 else
-                    sampledDistance = -math::fastlog(1-rand) / samplingDensity;
+                    sampledDistance = -math::fastlog(rand) / samplingDensity;
             } else {
-                sampledDistance = m_maxExpDist->sample(1-rand, mRec.pdfSuccess);
+                sampledDistance = m_maxExpDist->sample(rand, mRec.pdfSuccess);
             }
         } else {
             /* Don't generate a medium interaction */
             sampledDistance = std::numeric_limits<Float>::infinity();
+            if (m_strategy == EThroughput && throughput) {
+                channelProbs = throughput->probWeightedChannel();
+            }
         }
         Float distSurf = ray.maxt - ray.mint;
         bool success = true;
@@ -343,28 +346,13 @@ public:
                 break;
 
             case EBalance:
-                mRec.pdfFailure = 0;
-                mRec.pdfSuccess = 0;
-                for (int i=0; i<SPECTRUM_SAMPLES; ++i) {
-                    if (m_sigmaT[i] == 0) {
-                        /* We never sample a medium interaction in this case */
-                        //mRec.pdfSuccess += 0;
-                        mRec.pdfFailure += 1;
-                    } else {
-                        Float tmp = math::fastexp(-m_sigmaT[i] * sampledDistance);
-                        mRec.pdfFailure += tmp;
-                        mRec.pdfSuccess += m_sigmaT[i] * tmp;
-                    }
-                }
-                mRec.pdfFailure /= SPECTRUM_SAMPLES;
-                mRec.pdfSuccess /= SPECTRUM_SAMPLES;
-                break;
-
             case EThroughput:
                 mRec.pdfFailure = 0;
                 mRec.pdfSuccess = 0;
                 for (int i=0; i<SPECTRUM_SAMPLES; ++i) {
                     if (m_sigmaT[i] == 0) {
+                        /* We never sample a medium interaction in this case */
+                        //mRec.pdfSucces += 0;
                         mRec.pdfFailure += channelProbs[i];
                     } else {
                         Float tmp = math::fastexp(-m_sigmaT[i] * sampledDistance)
@@ -404,6 +392,12 @@ public:
     void eval(const Ray &ray, MediumSamplingRecord &mRec, const Spectrum *throughput) const {
         const Float wgt = m_mediumSamplingWeight;
         Float distance = ray.maxt - ray.mint;
+
+        Spectrum channelProbs(1.0f / SPECTRUM_SAMPLES);
+        if (m_strategy == EThroughput && throughput) {
+            channelProbs = throughput->probWeightedChannel();
+        }
+
         switch (m_strategy) {
             case EManual:
             case EManualSingle: {
@@ -413,16 +407,16 @@ public:
                 }
                 break;
 
+            case EThroughput:
             case EBalance: {
                     mRec.pdfSuccess = 0;
                     mRec.pdfFailure = 0;
                     for (int i=0; i<SPECTRUM_SAMPLES; ++i) {
-                        Float temp = math::fastexp(-m_sigmaT[i] * distance);
+                        Float temp = math::fastexp(-m_sigmaT[i] * distance)
+                                    * channelProbs[i];
                         mRec.pdfSuccess += m_sigmaT[i] * temp;
                         mRec.pdfFailure += temp;
                     }
-                    mRec.pdfSuccess /= SPECTRUM_SAMPLES;
-                    mRec.pdfFailure /= SPECTRUM_SAMPLES;
                 }
                 break;
 
