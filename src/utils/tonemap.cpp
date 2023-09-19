@@ -62,9 +62,12 @@ public:
         cout << "   -o file        Save the output with a given filename" << endl << endl;
         cout << "   -t             Multithreaded: process several files in parallel" << endl << endl;
         cout << "   -M             Merge all images into one final, averaged image" << endl << endl;
-        cout << "   -R fraction    Robustness fraction: when merging images with -M, discard" << endl;
-        cout << "                  this fraction of extremal values (e.g. -R 0.05 discards the" << endl;
-        cout << "                  5\% lowest and 5\% highest samples of the given files to merge)" << endl << endl;
+        cout << "   -C num         Cutoff: if using -M, only merge <num> images and ignore the rest" << endl << endl;
+        cout << "   -R val         When merging images with -M, first merge them in to this" << endl;
+        cout << "                  many bins and drop the extremal bin values." << endl;
+        cout << "                  (legacy: val = robustness fraction: discard this fraction" << endl;
+        cout << "                  of extremal values (e.g. -R 0.05 discards the 5\% lowest and" << endl;
+        cout << "                  5\% highest samples of the given files to merge)" << endl << endl;
         cout << "   -n             Don't produce a LDR tonemapped image, useful for combined use with -M" << endl << endl;
         cout << " The operations are ordered as follows: 1. crop, 2. bloom, 3. resize, 4. color" << endl;
         cout << " balance, 5. tonemap, 6. annotate. To simply process a directory full of EXRs" << endl;
@@ -183,9 +186,10 @@ public:
         bool merge = false;
         bool noLDR = false;
         Float robustFraction = 0;
+        long maxNumBitmapsToMerge = -1;
 
         /* Parse command-line arguments */
-        while ((optchar = getopt(argc, argv, "htMR:xag:m:f:r:b:c:o:p:s:B:F:n")) != -1) {
+        while ((optchar = getopt(argc, argv, "htMC:R:xag:m:f:r:b:c:o:p:s:B:F:n")) != -1) {
             switch (optchar) {
                 case 'h': {
                         help();
@@ -315,14 +319,16 @@ public:
                     merge = true;
                     break;
 
+                case 'C':
+                    maxNumBitmapsToMerge = strtol(optarg, &end_ptr, 10);
+                    if (*end_ptr != '\0')
+                        SLog(EError, "Could not parse the merge Cutoff number!");
+                    break;
+
                 case 'R':
                     robustFraction = (Float) strtod(optarg, &end_ptr);
                     if (*end_ptr != '\0')
                         SLog(EError, "Could not parse the Robust fraction value!");
-                    if (robustFraction >= 0.5)
-                        SLog(EError, "Robust fraction >= 0.5 will drop "
-                                "everything! (parsed value: %f)",
-                                robustFraction);
                     break;
 
                 case 'n':
@@ -488,12 +494,21 @@ public:
                         Log(EWarn, "Error was: %s.", e.what());
                         continue;
                     }
-                    n++;
                     input->accumulate(thisInput.get());
+                    n++;
+                    if (maxNumBitmapsToMerge > 0 && n >= maxNumBitmapsToMerge) {
+                        Log(EInfo, "Stopping because cutoff number of bitmaps (%ld) was reached", maxNumBitmapsToMerge);
+                        break;
+                    }
                 }
                 input->scale(1.0/n);
             } else {
                 /* Robust merging requested */
+
+                if (maxNumBitmapsToMerge > 0 && argc < maxNumBitmapsToMerge) {
+                    Log(EError, "Requested merge cutoff of %zu bitmaps, but only %d input files provided. Bailing out!",
+                            maxNumBitmapsToMerge, argc);
+                }
 
                 /* Memory is cheap: get everything in-mem */
                 std::vector<ref<Bitmap> > bitmaps;
@@ -509,6 +524,11 @@ public:
                         Log(EWarn, "Problem loading file \"%s\".", inputFile.string().c_str());
                         Log(EWarn, "Error was: %s.", e.what());
                         continue;
+                    }
+                    if (bitmaps.size() >= maxNumBitmapsToMerge) {
+                        Log(EInfo, "Stopped loading input files because cutoff "
+                                "num files reached (%zu)", maxNumBitmapsToMerge);
+                        break;
                     }
                 }
                 size_t numBitmaps = bitmaps.size();
@@ -530,26 +550,33 @@ public:
                  * bitmaps into three sets from which we only use the 
                  * median value. We can hack that in here by pre-merging 
                  * the bitmaps into 3 merged ones. */
-                if (robustFraction == -1) {
-                    Log(EInfo, "Merging all %d bitmaps into three sets and "
-                            "taking median for minimum bias.", numBitmaps);
-                    std::vector<ref<Bitmap> > mergedBitmaps(3);
-                    for (size_t i = 0; i < mergedBitmaps.size(); i++) {
-                        mergedBitmaps[i] = new Bitmap(
-                                input->getPixelFormat(), Bitmap::EFloat64,
-                                input->getSize(), input->getChannelCount());
-                    }
-                    size_t numToMerge = numBitmaps / 3 + 0.5;
-
-                    mergeBitmaps(bitmaps, mergedBitmaps[0], 0,            0,   numToMerge);
-                    mergeBitmaps(bitmaps, mergedBitmaps[1], 0,   numToMerge, 2*numToMerge);
-                    mergeBitmaps(bitmaps, mergedBitmaps[2], 0, 2*numToMerge,   numBitmaps);
-                    /* Just pretend like we were given our 3 merged bitmaps */
-                    bitmaps = mergedBitmaps;
-                    numBitmaps = 3;
+                if (robustFraction == -1 || robustFraction > 1) {
+                    if (robustFraction == -1)
+                        robustFraction = 3; // legacy
+                    size_t numBins = robustFraction + 0.5;
                     numToDrop = 1;
+                    if (numBins > numBitmaps) {
+                        Log(EWarn, "Requested %d bins, but only got %d bitmaps -> using %d bins",
+                                numBins, numBitmaps, numBitmaps);
+                    } else {
+                        Log(EInfo, "Merging all %d bitmaps into %d bins and droping extremal bins.",
+                                numBitmaps, numBins);
+                        std::vector<ref<Bitmap> > mergedBitmaps(numBins);
+                        for (size_t i = 0; i < numBins; i++) {
+                            mergedBitmaps[i] = new Bitmap(
+                                    input->getPixelFormat(), Bitmap::EFloat64,
+                                    input->getSize(), input->getChannelCount());
+                            size_t startIdx = std::round(((double) i  ) * numBitmaps / numBins);
+                            size_t endIdx   = std::round(((double) i+1) * numBitmaps / numBins);
+                            mergeBitmaps(bitmaps, mergedBitmaps[i], 0, startIdx, endIdx);
+                        }
+                        /* Just pretend like we were given our merged bitmaps */
+                        bitmaps = mergedBitmaps;
+                        numBitmaps = numBins;
+                    }
                 } else {
-                    /* 'Regular' dropping of samples out of all input bitmaps */
+                    /* 'Regular' dropping of samples out of all input bitmaps
+                     * [OLD, LEGACY, More bias than 'numBins' approach] */
                     numToDrop = std::max((size_t)1,(size_t)(0.5 + numBitmaps * robustFraction));
                 }
                 Assert(numToDrop <= numBitmaps/2);
