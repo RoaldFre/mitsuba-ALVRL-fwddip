@@ -211,6 +211,8 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
      * (probably a good idea to use a finite maxInternalReflections!) */
     m_numSIRsurfaceIntReflFactor = props.getFloat("numSIRsurfaceIntReflFactor", 1);
 
+    m_useRmsWeightForSIR = props.getBoolean("useSpectralRmsForSIR", false);
+
     /* Force path splitting into (at least) this many paths when sampling an internal reflection event */
     m_internalReflectionForcedSplit = props.getSize("internalReflectionForcedSplit", 0);
 
@@ -277,16 +279,6 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     }
 #endif
 
-    Log(EInfo, "DirectSamplingSubsurface settings: directSampling %d, "
-            "MIS %d, singleChannel %d, allowIncomingOutgoingDirections %d, "
-            "minIntRefl %d, maxIntRefl %d, irw %f, SIRsurface %d, SIRnonSurf %d, "
-            "SIRsurfIRFact %f, IRFSplit %zu",
-            m_directSampling, m_directSamplingMIS,
-            m_singleChannel, m_allowIncomingOutgoingDirections,
-            m_minInternalReflections, m_maxInternalReflections,
-            m_internalReflectionWeight,
-            m_numSIRsurface, m_SIRnonSurfaceOversamplingFactor,
-            m_numSIRsurfaceIntReflFactor, m_internalReflectionForcedSplit);
     {
         LockGuard lock(sourcesMutex);
         m_sourcesIndex = sourcesIndex++;
@@ -306,6 +298,20 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
 
     m_internalGeometryOverlapMargin = props.getFloat(
             "internalGeometryOverlapAbsorptionLengthMargin", 0) / sigmaA.min();
+
+    Log(EInfo, "DirectSamplingSubsurface settings: directSampling %d, "
+            "MIS %d, singleChannel %d, allowIncomingOutgoingDirections %d, "
+            "minIntRefl %d, maxIntRefl %d, irw %f, SIRsurface %d, SIRnonSurf %d, "
+            "SIRsurfIRFact %f, rmsW %d, IRFSplit %zu, "
+            "idc %e, nil %d, igom %e",
+            m_directSampling, m_directSamplingMIS,
+            m_singleChannel, m_allowIncomingOutgoingDirections,
+            m_minInternalReflections, m_maxInternalReflections,
+            m_internalReflectionWeight,
+            m_numSIRsurface, m_SIRnonSurfaceOversamplingFactor,
+            m_numSIRsurfaceIntReflFactor, m_useRmsWeightForSIR,  m_internalReflectionForcedSplit,
+            m_itsDistanceCutoff, m_numItsLayers,
+            m_internalGeometryOverlapMargin);
 }
 
 DirectSamplingSubsurface::DirectSamplingSubsurface(Stream *stream,
@@ -314,6 +320,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(Stream *stream,
     m_numSIRsurface = stream->readSize();
     m_SIRnonSurfaceOversamplingFactor = stream->readSize();
     m_numSIRsurfaceIntReflFactor = stream->readFloat();
+    m_useRmsWeightForSIR = stream->readBool();
     m_internalReflectionForcedSplit = stream->readSize();
     m_directSampling = stream->readBool();
     m_directSamplingMIS = stream->readBool();
@@ -344,6 +351,7 @@ void DirectSamplingSubsurface::serialize(Stream *stream,
     stream->writeSize(m_numSIRsurface);
     stream->writeSize(m_SIRnonSurfaceOversamplingFactor);
     stream->writeFloat(m_numSIRsurfaceIntReflFactor);
+    stream->writeBool(m_useRmsWeightForSIR);
     stream->writeSize(m_internalReflectionForcedSplit);
     stream->writeBool(m_directSampling);
     stream->writeBool(m_directSamplingMIS);
@@ -1173,7 +1181,7 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
 #endif
     rec_wi = its_in.toWorld(bRec.wo);
 
-    // dubbel check for numerical rounding errors after frame conversion
+    // double check for numerical rounding errors after frame conversion
     if (requestOutwardDirection && dot(rec_wi, its_in.shFrame.n) <= 0)
         return Spectrum(0.0f);
 
@@ -2572,7 +2580,8 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
             s.weightForDirectContrib   = factor * pdfForDirectContrib.invertButKeepZero();
             s.weightForIndirectContrib = factor * indirectPdf.invertButKeepZero();
 
-            Float theSampleWeight = s.weightForIndirectContrib.maxAbsolute();
+            Float theSampleWeight = (m_useRmsWeightForSIR ?
+                    s.weightForIndirectContrib.rms() : s.weightForIndirectContrib.maxAbsolute());
             if (!std::isfinite(theSampleWeight) || theSampleWeight < 0) {
                 Log(EWarn, "Problematic sample weight: %e", theSampleWeight);
             } else if (theSampleWeight > 0) {
@@ -2614,7 +2623,7 @@ bool DirectSamplingSubsurface::indirectSample_SIR(
 
 
 /**
- * Sample an incoming query point on the surface, with seperate direct &
+ * Sample an incoming query point on the surface, with separate direct &
  * indirect sampling strategies for the directions & extraParams if
  * requested (optionally MIS weighted), but without Sample Importance
  * Resampling (SIR) */

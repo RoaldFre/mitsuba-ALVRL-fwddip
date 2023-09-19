@@ -600,6 +600,14 @@ public:
         return result;
     }
 
+    /// Return the root-mean-square of the spectral samples
+    inline Scalar rms() const {
+        Scalar result = s[0]*s[0];
+        for (int i=1; i<N; i++)
+            result += s[i]*s[i];
+        return std::sqrt(result / N);
+    }
+
     /// Negate
     inline TSpectrum operator-() const {
         TSpectrum value;

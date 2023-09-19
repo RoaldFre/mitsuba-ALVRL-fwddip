@@ -1342,6 +1342,7 @@ protected:
      * tentative extraParams and direction samples. */
     size_t m_SIRnonSurfaceOversamplingFactor;
     Float m_numSIRsurfaceIntReflFactor;
+    bool m_useRmsWeightForSIR;
     size_t m_internalReflectionForcedSplit;
     ref<RadianceSources> m_sources;
     int m_sourcesIndex;
