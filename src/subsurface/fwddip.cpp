@@ -340,9 +340,26 @@ inline IntersectionWeightFunc fwdDipSmallLengthWeightFunc(
 class MTS_EXPORT_RENDER RayDirectionSurfaceSampler final : public SurfaceSampler {
 public:
     RayDirectionSurfaceSampler(const Spectrum &sigmaTr, const Spectrum &p,
-            Float retreatFactor, bool bidirectional, const IntersectionSampler *itsSampler)
+            Float retreatFactor, bool bidirectional,
+            const std::string &sampleStrategy, const IntersectionSampler *itsSampler)
             : m_sigmaTr(sigmaTr), m_p(p), m_retreatFactor(retreatFactor),
-              m_bidirectional(bidirectional), m_itsSampler(itsSampler) { }
+              m_bidirectional(bidirectional), m_itsSampler(itsSampler) {
+        if (sampleStrategy == "pt") {
+            // sense also with perturbed tetrahedron
+            m_sensingWeight = 0.5;
+            m_perturbedWeight = 0.5;
+        } else if (sampleStrategy == "ss") {
+            // single sense ray
+            m_sensingWeight = 0.5;
+            m_perturbedWeight = 0;
+        } else if (sampleStrategy == "om") {
+            // only marginalized
+            m_sensingWeight = 0;
+            m_perturbedWeight = 0;
+        } else {
+            Log(EError, "Unknown sampling strategy '%s' for RayDirectionSurfaceSampler", sampleStrategy.c_str());
+        }
+    }
 
     virtual Float sample(const Intersection &its,
             const Vector &d_out, const Scene *scene,
@@ -416,7 +433,7 @@ public:
         } else {
             Float margPdf, sensePdf;
             sampleMarginalized(d_out, sampler, rayDir, margPdf);
-            if (sampleWithSensing(
+            if (m_sensingWeight != 0 && sampleWithSensing(
                     its, d_out, scene, shapes, throughput, NULL, rayDir, sensePdf)) {
                 dirPdf = m_sensingWeight * sensePdf
                         + (1 - m_sensingWeight) * margPdf;
@@ -478,20 +495,18 @@ public:
             const std::vector<const Shape *> &shapes, const Spectrum &throughput,
             Sampler *sampler, Vector &rayDir, Float &dirPdf) const {
 
-        const Float perturbedWeight = 0.5;
-
         Float pertPdf, unpertPdf;
         if (sampler) {
             // Sampling was requested! (BEWARE, THIS IS A BIT OF A LOGICAL JUNGLE :P)
-            if (sampler->next1D() < perturbedWeight) {
+            if (m_perturbedWeight != 0 && sampler->next1D() < m_perturbedWeight) {
                 // Try to sample perturbed
                 if (sampleWithSensing_perturbed(its, d_out, scene, shapes,
                         throughput, sampler, rayDir, pertPdf)) {
                     if (sampleWithSensing_internal(its, d_out, scene, shapes,
                             throughput, NULL, rayDir, unpertPdf)) {
                         // could sample pert and unpert
-                        dirPdf = perturbedWeight * pertPdf
-                                + (1 - perturbedWeight) * unpertPdf;
+                        dirPdf = m_perturbedWeight * pertPdf
+                                + (1 - m_perturbedWeight) * unpertPdf;
                         return true;
                     } else {
                         // could only sample pert
@@ -514,11 +529,11 @@ public:
                 // Try to sample unperturbed
                 if (sampleWithSensing_internal(its, d_out, scene, shapes,
                         throughput, sampler, rayDir, unpertPdf)) {
-                    if (sampleWithSensing_perturbed(its, d_out, scene, shapes,
-                            throughput, NULL, rayDir, pertPdf)) {
+                    if (m_perturbedWeight != 0 && sampleWithSensing_perturbed(
+                            its, d_out, scene, shapes, throughput, NULL, rayDir, pertPdf)) {
                         // could sample pert and unpert
-                        dirPdf = perturbedWeight * pertPdf
-                                + (1 - perturbedWeight) * unpertPdf;
+                        dirPdf = m_perturbedWeight * pertPdf
+                                + (1 - m_perturbedWeight) * unpertPdf;
                         return true;
                     } else {
                         // could only sample unpert
@@ -540,7 +555,7 @@ public:
             }
         } else {
             // only pdf is requested (this makes the logic a bit cleaner ;-) )
-            bool pertWorks   = sampleWithSensing_perturbed(
+            bool pertWorks   = m_perturbedWeight != 0 && sampleWithSensing_perturbed(
                     its, d_out, scene, shapes, throughput, NULL, rayDir, pertPdf);
             bool unpertWorks = sampleWithSensing_internal(
                     its, d_out, scene, shapes, throughput, NULL, rayDir, unpertPdf);
@@ -549,8 +564,8 @@ public:
                 return false;
             } else if (pertWorks && unpertWorks) {
                 // could sample pert and unpert
-                dirPdf = perturbedWeight * pertPdf
-                        + (1 - perturbedWeight) * unpertPdf;
+                dirPdf = m_perturbedWeight * pertPdf
+                        + (1 - m_perturbedWeight) * unpertPdf;
             } else if (pertWorks) {
                 dirPdf = pertPdf;
             } else {
@@ -734,7 +749,7 @@ public:
         Float margPdf = pdfMarginalized(d_out, rayDir);
         Float sensePdf;
         Vector nonConstRayDir(rayDir); // to make compiler happy
-        if (sampleWithSensing(
+        if (m_sensingWeight != 0 && sampleWithSensing(
                 its, d_out, scene, shapes, throughput, NULL, nonConstRayDir, sensePdf)) {
             dirPdf = m_sensingWeight * sensePdf
                     + (1 - m_sensingWeight) * margPdf;
@@ -788,7 +803,11 @@ protected:
 
     /** Fraction of times to attempt 'depth sensing' sampling as opposed to 
      * marginalized sampling */
-    const Float m_sensingWeight = 0.5;
+    Float m_sensingWeight;
+
+    /** If we are 'depth sensing', fraction of times to use the ensemble of
+     * perturbed rays */
+    Float m_perturbedWeight;
 
     const ref<const IntersectionSampler> m_itsSampler;
 };
@@ -1073,11 +1092,12 @@ void FwdDip::configure() {
                 smallLengthSampler_along, itsSampler.get()));
 # endif
 
-# if 1
-        bool bidirectional = m_dipoles[0]->useBidirectionalrayDirSurfSampler(); // quick and dirty, not the best place to store this
-        registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, 0, bidirectional, itsSampler));
-        //registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, ShadowEpsilon, itsSampler));
-# endif
+        if (m_dipoles[0]->useRayDirSurfSampler()) { // quick and dirty, not the best place to store this
+            bool bidirectional = m_dipoles[0]->useBidirectionalrayDirSurfSampler(); // quick and dirty, not the best place to store this
+            const std::string &rdsSampStrategy = m_dipoles[0]->getRayDirSurfSamplerStrategy(); // quick and dirty, not the best place to store this
+            registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, 0, bidirectional, rdsSampStrategy, itsSampler));
+            //registerSampler(1.0, new RayDirectionSurfaceSampler(sigmaTr, p_spectrum, ShadowEpsilon, bidirectional, rdsSampStrategy, itsSampler));
+        }
 #endif /* MTS_FWDDIP_DEBUG_USE_SIMPLE_JENSEN_SURFACE_SAMPLER*/
     }
 

@@ -33,7 +33,9 @@ public:
         m_debug_uniform_ps_max = props.getFloat("debug_uniform_ps_max", -1);
         m_debug_requested_hemi_weight = props.getFloat("debug_requested_hemi_weight", -1);
 
-        m_bidirectionalRayDirSurfSampler = props.getBoolean("bidirectionalRayDirSurfSampler", true);
+        m_useRayDirSurfSampler = props.getBoolean("rayDirSurfSampler", true); /* TODO Disable by default because very high ray cost for not much benefit unless very sparse media (in which case subsurf model isn't the best choice anyway) */
+        m_useBidirectionalRayDirSurfSampler = props.getBoolean("bidirectionalRayDirSurfSampler", true);
+        m_rayDirSurfSamplerStrategy = props.getString("rayDirSurfSamplerStrategy", "pt"); // TODO change default to ss or om?
 
         Log(EInfo, "FWDSCAT DEBUG: ps[%f|%f..%f], hemi %f", 
                 m_debug_override_ps,
@@ -41,7 +43,8 @@ public:
                 m_debug_uniform_ps_max,
                 m_debug_requested_hemi_weight);
 
-        Log(EInfo, "Loaded FwdScat medium with p = %f", p);
+        Log(EInfo, "Loaded FwdScat medium with p = %f, g %f; %s)",
+                p, g, toString().c_str());
     }
 
     FwdScat(Stream *stream, InstanceManager *manager) :
@@ -53,7 +56,9 @@ public:
         m_debug_uniform_ps_min = stream->readFloat();
         m_debug_uniform_ps_max = stream->readFloat();
         m_debug_requested_hemi_weight = stream->readFloat();
-        m_bidirectionalRayDirSurfSampler = stream->readBool();
+        m_useRayDirSurfSampler = stream->readBool();
+        m_useBidirectionalRayDirSurfSampler = stream->readBool();
+        m_rayDirSurfSamplerStrategy = stream->readString();
         Log(EInfo, "unser FwdScat: %s", toString().c_str());
     }
 
@@ -66,7 +71,9 @@ public:
         stream->writeFloat(m_debug_uniform_ps_min);
         stream->writeFloat(m_debug_uniform_ps_max);
         stream->writeFloat(m_debug_requested_hemi_weight);
-        stream->writeBool(m_bidirectionalRayDirSurfSampler);
+        stream->writeBool(m_useRayDirSurfSampler);
+        stream->writeBool(m_useBidirectionalRayDirSurfSampler);
+        stream->writeString(m_rayDirSurfSamplerStrategy);
     }
 
     std::string toString() const {
@@ -77,7 +84,9 @@ public:
                 <<", minMu="<<m_direction_min_mu
                 <<", eta="<<m_eta
                 <<", exactMargOverDirectionWeight="<<m_exactMargOverDirectionWeight
-                <<", bidirRayDirSurfSamp="<<m_bidirectionalRayDirSurfSampler
+                <<", rayDirSurfSampler="<<m_useRayDirSurfSampler
+                <<", bidirRayDirSurfSamp="<<m_useBidirectionalRayDirSurfSampler
+                <<", rayDirSurfSamplerStrategy="<<m_rayDirSurfSamplerStrategy
                 <<"]";
         return oss.str();
     }
@@ -229,11 +238,19 @@ protected:
 
     /* Not really needed at this level, but added here so we can query it
      * easily when wrapping this in a DipoleModel to set up the surface
-     * samplers. Quick and dirty, not very clean. */
-    bool m_bidirectionalRayDirSurfSampler;
+     * samplers. Quick and dirty, not very clean, needs restructure (TODO). */
+    bool m_useRayDirSurfSampler;
+    bool m_useBidirectionalRayDirSurfSampler;
+    std::string m_rayDirSurfSamplerStrategy;
 public:
+    bool useRayDirSurfSampler() const {
+        return m_useRayDirSurfSampler;
+    }
     bool useBidirectionalrayDirSurfSampler() const {
-        return m_bidirectionalRayDirSurfSampler;
+        return m_useBidirectionalRayDirSurfSampler;
+    }
+    std::string getRayDirSurfSamplerStrategy() const {
+        return m_rayDirSurfSamplerStrategy;
     }
 };
 
