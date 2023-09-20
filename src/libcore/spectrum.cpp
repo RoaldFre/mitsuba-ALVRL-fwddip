@@ -480,7 +480,7 @@ int Spectrum::sampleWeightedChannel(Sampler *sampler, Spectrum *probDistPtr) con
         Float cumsum = 0;
         for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
             cumsum += weights[i];
-            if (cumsum >= x) {
+            if (cumsum >= x || i == SPECTRUM_SAMPLES - 1 /* round-off protection */) {
                 channel = i;
                 probDist = weights / theSum;
                 break;
