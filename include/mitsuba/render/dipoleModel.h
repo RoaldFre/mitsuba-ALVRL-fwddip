@@ -87,6 +87,7 @@ struct MTS_EXPORT_RENDER DipoleConfig {
     ZvMode zvMode;
     bool useEffectiveBRDF;
     DipoleMode dipoleMode;
+    bool shareSampledExtraParams; /// Only MIS-sample extra params for 1 spectral channel & share them
     /**
      * Bit of a hack for index-MISmatched dipole configurations. This makes
      * the dipole refract its directions and change the virtual source
@@ -104,6 +105,7 @@ struct MTS_EXPORT_RENDER DipoleConfig {
         zvMode = static_cast<ZvMode>(stream->readInt());
         dipoleMode = static_cast<DipoleMode>(stream->readInt());
         useEffectiveBRDF = stream->readBool();
+        shareSampledExtraParams = stream->readBool();
         eta = stream->readFloat();
     }
 
@@ -114,6 +116,7 @@ struct MTS_EXPORT_RENDER DipoleConfig {
         stream->writeInt(zvMode);
         stream->writeInt(dipoleMode);
         stream->writeBool(useEffectiveBRDF);
+        stream->writeBool(shareSampledExtraParams);
         stream->writeFloat(eta);
     }
 
@@ -412,18 +415,26 @@ public:
     }
     /// const version
     inline const void *getIndividualExtraParams(const void *extraParams, int i) const {
+        if (m_dipConf.shareSampledExtraParams)
+            i = 0;
         return static_cast<const char*>(extraParams) + i*extraParamsPacketSize();
     }
     /// non-const version
     inline void *getIndividualExtraParams(void *extraParams, int i) const {
+        if (m_dipConf.shareSampledExtraParams)
+            i = 0;
         return static_cast<char*>(extraParams) + i*extraParamsPacketSize();
     }
     inline bool isValidExtraParam(const void *extraParams, int i) const {
+        if (m_dipConf.shareSampledExtraParams)
+            i = 0;
         const char *packet = static_cast<const char*>(extraParams)
                     + i*extraParamsPacketSize();
         return *reinterpret_cast<const bool*>(packet + individualExtraParamSize());
     }
     inline void setValidExtraParam(void *extraParams, int i, bool isValid) const {
+        if (m_dipConf.shareSampledExtraParams)
+            Assert(i == 0);
         char *packet = static_cast<char*>(extraParams)
                     + i*extraParamsPacketSize();
         *reinterpret_cast<bool*>(packet + individualExtraParamSize()) = isValid;
@@ -529,24 +540,41 @@ public:
         Assert(!throughput.isZero());
 
         Spectrum pdf;
+
         if (m_dipoles.size() == 1) {
             Assert(throughput[0] != 0);
             pdf = Spectrum(m_dipoles[0]->sampleExtraParamsDipole(
                     n_in, d_in, n_out, d_out, R, extraParams, dipConf, sampler));
             setValidExtraParam(extraParams, 0, pdf[0] != 0);
         } else {
-            for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
-                if (throughput[i] == 0) {
-                    pdf[i] = 0;
-                } else {
-                    void *myExtraParams = getIndividualExtraParams(extraParams, i);
-                    pdf[i] = m_dipoles[i]->sampleExtraParamsDipole(
-                            n_in, d_in, n_out, d_out, R, myExtraParams, dipConf, sampler);
+            if (dipConf.shareSampledExtraParams) {
+                Spectrum channelProb;
+                int i = throughput.sampleWeightedChannel(sampler, &channelProb);
+                Float thePdf = channelProb[i] * m_dipoles[i]->sampleExtraParamsDipole(
+                        n_in, d_in, n_out, d_out, R, extraParams, dipConf, sampler);
+                setValidExtraParam(extraParams, 0, thePdf != 0);
+                if (thePdf != 0) {
+                    for (int j = 0; j < SPECTRUM_SAMPLES; j++) {
+                        if (i == j || channelProb[j] == 0)
+                            continue;
+                        thePdf += channelProb[j] * m_dipoles[j]->pdfExtraParamsDipole(
+                                n_in, d_in, n_out, d_out, R, extraParams, dipConf);
+                    }
                 }
-                setValidExtraParam(extraParams, i, pdf[i] != 0);
+                pdf = Spectrum(thePdf);
+            } else {
+                for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
+                    if (throughput[i] == 0) {
+                        pdf[i] = 0;
+                    } else {
+                        void *myExtraParams = getIndividualExtraParams(extraParams, i);
+                        pdf[i] = m_dipoles[i]->sampleExtraParamsDipole(
+                                n_in, d_in, n_out, d_out, R, myExtraParams, dipConf, sampler);
+                    }
+                    setValidExtraParam(extraParams, i, pdf[i] != 0);
+                }
             }
         }
-
 #ifdef MTS_DIPOLE_DEBUG
         if (pdf.isZero())
             return pdf;
@@ -594,13 +622,26 @@ public:
             pdf = Spectrum(m_dipoles[0]->pdfExtraParamsDipole(
                     n_in, d_in, n_out, d_out, R, extraParams, dipConf));
         } else {
-            for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
-                if (throughput[i] == 0) {
-                    pdf[i] = 0;
-                } else {
-                    const void *myExtraParams = getIndividualExtraParams(extraParams, i);
-                    pdf[i] = m_dipoles[i]->pdfExtraParamsDipole(
-                            n_in, d_in, n_out, d_out, R, myExtraParams, dipConf);
+            if (dipConf.shareSampledExtraParams) {
+                Spectrum channelProb = throughput.probWeightedChannel();
+                Float thePdf = 0;
+                Assert(isValidExtraParam(extraParams, 0));
+                for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
+                    if (channelProb[i] == 0)
+                        continue;
+                    thePdf += channelProb[i] * m_dipoles[i]->pdfExtraParamsDipole(
+                            n_in, d_in, n_out, d_out, R, extraParams, dipConf);
+                }
+                pdf = Spectrum(thePdf);
+            } else {
+                for (int i = 0; i < SPECTRUM_SAMPLES; i++) {
+                    if (throughput[i] == 0) {
+                        pdf[i] = 0;
+                    } else {
+                        const void *myExtraParams = getIndividualExtraParams(extraParams, i);
+                        pdf[i] = m_dipoles[i]->pdfExtraParamsDipole(
+                                n_in, d_in, n_out, d_out, R, myExtraParams, dipConf);
+                    }
                 }
             }
         }
@@ -888,6 +929,12 @@ inline DipoleConfig::DipoleConfig(const Properties &props) {
     }
 
     useEffectiveBRDF = props.getBoolean("useEffectiveBRDF", false);
+
+    shareSampledExtraParams = props.getBoolean("shareSampledExtraParams", true);
+    if (!shareSampledExtraParams) // TODO
+        SLog(EWarn, "TODO disabling shareSampledExtraParams is currently "
+                "broken, it has a slight bias (noticed in combination "
+                "with surfaceSIR)");
 
     Spectrum _sigmaS, _sigmaA, _g;
     lookupMaterial(props, _sigmaS, _sigmaA, _g, &eta);
