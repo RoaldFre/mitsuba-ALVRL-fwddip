@@ -534,14 +534,6 @@ public:
                 size_t numBitmaps = bitmaps.size();
                 size_t numToDrop;
 
-                if (numBitmaps < 3) {
-                    Log(EWarn, "Requested robust merging, but could not "
-                            "load at least 3 bitmaps! (loaded %d bitmaps)! "
-                            "WILL NOT DROP ANY OUTLIERS!",
-                            numBitmaps);
-                    numToDrop = 0;
-                }
-
                 /* We have the least amount of bias when our pixel 
                  * distributions are as symmetrical as possible (as close 
                  * to a gaussian as possible), according to CLT, this 
@@ -579,10 +571,17 @@ public:
                      * [OLD, LEGACY, More bias than 'numBins' approach] */
                     numToDrop = std::max((size_t)1,(size_t)(0.5 + numBitmaps * robustFraction));
                 }
-                Assert(numToDrop <= numBitmaps/2);
 
-                if (numBitmaps - 2*numToDrop <= 0)
-                    numToDrop--;
+                if (numBitmaps < 3) {
+                    Log(EWarn, "Requested robust merging, but could not "
+                            "load at least 3 bitmaps! (loaded %d bitmaps)! "
+                            "WILL NOT DROP ANY OUTLIERS!",
+                            numBitmaps);
+                    numToDrop = 0;
+                }
+
+                Assert(numBitmaps - 2*numToDrop > 0);
+
                 Log(EInfo, "Requested robust merging: dropping %d lowest and %d highest samples out of %d",
                         numToDrop, numToDrop, numBitmaps);
 
