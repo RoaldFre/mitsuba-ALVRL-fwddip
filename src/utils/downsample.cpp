@@ -56,14 +56,13 @@ public:
                     for (size_t out_i=0; out_i<outHeight; ++out_i) {
                         for (size_t out_j=0; out_j<outWidth; ++out_j) {
                             for (size_t c = 0; c < nChannels; ++c) {
-                                half *outPix = &outData[nChannels*(outWidth*out_i + out_j) + c];
-                                outData[nChannels*(outWidth*out_i + out_j) + c] = 0;
+                                double sum = 0; // compute average in high precision
                                 for (int u = 0; u < N; ++u) {
                                     for (int v = 0; v < N; ++v) {
-                                        *outPix += inData[nChannels*(inWidth*(N*out_i+u) + N*out_j+v) + c];
+                                        sum += inData[nChannels*(inWidth*(N*out_i+u) + N*out_j+v) + c];
                                     }
                                 }
-                                *outPix /= N*N;
+                                outData[nChannels*(outWidth*out_i + out_j) + c] = sum / (N*N);
                             }
                         }
                     }
@@ -76,14 +75,13 @@ public:
                     for (size_t out_i=0; out_i<outHeight; ++out_i) {
                         for (size_t out_j=0; out_j<outWidth; ++out_j) {
                             for (size_t c = 0; c < nChannels; ++c) {
-                                float *outPix = &outData[nChannels*(outWidth*out_i + out_j) + c];
-                                outData[nChannels*(outWidth*out_i + out_j) + c] = 0;
+                                double sum = 0; // compute average in high precision
                                 for (int u = 0; u < N; ++u) {
                                     for (int v = 0; v < N; ++v) {
-                                        *outPix += inData[nChannels*(inWidth*(N*out_i+u) + N*out_j+v) + c];
+                                        sum += inData[nChannels*(inWidth*(N*out_i+u) + N*out_j+v) + c];
                                     }
                                 }
-                                *outPix /= N*N;
+                                outData[nChannels*(outWidth*out_i + out_j) + c] = sum / (N*N);
                             }
                         }
                     }
