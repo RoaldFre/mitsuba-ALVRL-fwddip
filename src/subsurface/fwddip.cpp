@@ -862,10 +862,32 @@ protected:
  *         boundary conditions.
  *         \default{based on \code{material}}
  *     }
- *     \parameter{numSIR}{\Integer}{
- *         Number of tentative Sample Importance Resampling to generate
- *         when sampling incoming query locations. This can temper outliers
- *         somewhat, in return for an increase in computation time.
+ *     \parameter{maxInternalReflections}{\Integer}{
+ *         Maximum number of internal reflections within a single subsurface
+ *         scattering model evaluation. Limit this to prevent issues with
+ *         energy violation and excessive fireflies. This is only relevant
+ *         when we are index-matched internally, and coupled to an explicit
+ *         (index-mismatched) boundary BSDF (also see \code{intIOR} and
+ *         \code{extIOR}).
+ *         \default{2}
+ *     }
+ *     \parameter{numSIRsurface}{\Integer}{
+ *         Number of tentative Resampled Importance Sampling samples to generate
+ *         when sampling incoming query locations and all subsequent parameters
+ *         (directions and path length). This can temper outliers, especially
+ *         for self-illuminating media and/or internal reflections, in return
+ *         for an increase in computation time (which is typically worth it).
+ *         A good starting value for the Forward Scattering Dipole Model is 4.
+ *         See also \code{SIRnonSurfaceOversamplingFactor}.
+ *     }
+ *     \parameter{SIRnonSurfaceOversamplingFactor}{\Integer}{
+ *         Additional factor of Resampled Importance Sampling: number of
+ *         proposals to generate for the directions and path length for each
+ *         tentatively sampled incoming query location. This can be tuned
+ *         separately because those sampling steps are typically cheaper
+ *         than sampling an incoming query location, which uses ray tracing
+ *         to project onto the geometry.
+ *         See also \code{numSIRsurface}.
  *         \default{1}
  *     }
  *     \parameter{directSampling}{\Boolean}{
@@ -882,13 +904,20 @@ protected:
  *         Force the BSSRDF to only select a single colour channel?
  *         \default{\code{false}}
  *     }
- *     \parameter{cutoffNumAbsorptionLengths}{\Float}{
+ *     \parameter{cutoffNumEffectiveTransportLengths}{\Float}{
  *         When sampling an incoming query point on the surface of the
  *         associated geometry, don't consider points that are further away
- *         from the outgoing point than this number of absorption lengths.
- *         For `coloured' absorption, this corresponds to the longest
- *         absorption length over all channels.
+ *         from the outgoing point than this number of effective transport
+ *         lengths. For `coloured' absorption, this corresponds to the longest
+ *         effective transport length over all channels.
  *         \default{10}
+ *     }
+ *     \parameter{direction_min_mu}{\Float}{
+ *         Regularisation for extremely small overall direction deviations, 
+ *         with overall deviation cosine equal to 1-direction_min_mu.
+ *         For experiments with extremely sparse media (nearly transparent),
+ *         this should be reduced to a smaller value, e.g. 1e-11
+ *         (when compiled for using double precision!).
  *     }
  *     \parameter{reciprocal}{\Boolean}{
  *         Force reciprocity of the model?
@@ -919,15 +948,6 @@ protected:
  *                                    instead of on the incoming normal.
  *         \end{enumerate}
  *         \default{\texttt{Frisvad}}
- *     }
- *     \parameter{rejectInternalIncoming}{\Boolean}{
- *         Reject incoming directions that appear to come from
- *         \emph{inside} the medium instead of outside. This can
- *         happen due to the approximated tangent plane of the
- *         dipole model. Setting this to \code{true} helps with
- *         some overestimation, but it may cause thin edges to
- *         appear overly dark.
- *         \default{\code{true}}
  *     }
  *     \parameter{useEffectiveBRDF}{\Boolean}{
  *         Instead of using a full BSSRDF, use the associated effective
