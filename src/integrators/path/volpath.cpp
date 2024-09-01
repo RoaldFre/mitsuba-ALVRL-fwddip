@@ -51,6 +51,11 @@ static StatsCounter avgPathLength("Volumetric path tracer",
  *        lower value can be beneficial.
  *        \default{\code{1.0}}
  *     }
+ *     \parameter{directSampling}{\Boolean}{
+ *        Use a direct sampling strategy at every interaction, i.e. always
+ *        try to connect to a light source.
+ *        \default{\code{true}}
+ *     }
  *     \parameter{explicitSubsurfBoundary}{\Boolean}{
  *        When encauntering shapes with a subsurface scattering model that 
  *        supports explicit boundaries (i.e.\ models that can return
@@ -119,6 +124,7 @@ class VolumetricPathTracer : public MonteCarloIntegrator {
 protected:
     bool m_explicitSubsurfBoundary;
     bool m_onlyPathsThatEnteredAVolume;
+    bool m_directSampling;
     bool m_dumpLuminanceOfSamples; // quick hack for data gathering
 
     /* Paths that enter medium should have {at least, at most} this number 
@@ -130,6 +136,7 @@ protected:
 
 public:
     VolumetricPathTracer(const Properties &props) : MonteCarloIntegrator(props) {
+        m_directSampling = props.getBoolean("directSampling", true);
         m_onlyPathsThatEnteredAVolume = props.getBoolean("onlyPathsThatEnteredAVolume", false);
         m_minMediumScatteringChain = props.getInteger("minMediumScatteringChain", -1);
         m_maxMediumScatteringChain = props.getInteger("maxMediumScatteringChain", -1);
@@ -142,11 +149,14 @@ public:
             Log(EError, "Conflicting options: "
                     "minMedimuScatteringChain > maxMedimuScatteringChain!");
         }
+
+        Log(EInfo, "Loaded volpath with properties:\n%s",toString().c_str());
     }
 
     /// Unserialize from a binary data stream
     VolumetricPathTracer(Stream *stream, InstanceManager *manager)
              : MonteCarloIntegrator(stream, manager) {
+        m_directSampling = stream->readBool();
         m_onlyPathsThatEnteredAVolume = stream->readBool();
         m_minMediumScatteringChain = stream->readInt();
         m_maxMediumScatteringChain = stream->readInt();
@@ -157,6 +167,7 @@ public:
 
     void serialize(Stream *stream, InstanceManager *manager) const {
         MonteCarloIntegrator::serialize(stream, manager);
+        stream->writeBool(m_directSampling);
         stream->writeBool(m_onlyPathsThatEnteredAVolume);
         stream->writeInt(m_minMediumScatteringChain);
         stream->writeInt(m_maxMediumScatteringChain);
@@ -349,7 +360,8 @@ public:
             DirectSamplingRecord dRec(mRec.p, mRec.time);
 
             if (rRec.type & RadianceQueryRecord::EDirectMediumRadiance
-                    && includeMediumChainDepth(mediumInteractionChain)) {
+                    && includeMediumChainDepth(mediumInteractionChain)
+                    && m_directSampling) {
                 int interactions = m_maxDepth - rRec.depth - 1;
 
                 Spectrum value = scene->sampleAttenuatedEmitterDirect(
@@ -399,10 +411,14 @@ public:
             /* If a luminaire was hit, estimate the local illumination and
                weight using the power heuristic */
             if (!value.isZero() && (rRec.type & RadianceQueryRecord::EDirectMediumRadiance)
-                    && includeMediumChainDepth(mediumInteractionChain)) {
-                const Float emitterPdf = scene->pdfEmitterDirect(dRec);
-                if (!m_onlyPathsThatEnteredAVolume || hasEnteredAVolume)
+                    && includeMediumChainDepth(mediumInteractionChain)
+                    && (!m_onlyPathsThatEnteredAVolume || hasEnteredAVolume)) {
+                if (m_directSampling) {
+                    const Float emitterPdf = scene->pdfEmitterDirect(dRec);
                     Li += throughput * value * miWeight(phasePdf, emitterPdf);
+                } else {
+                    Li += throughput * value;
+                }
             }
 
             /* ==================================================================== */
@@ -471,8 +487,9 @@ public:
             DirectSamplingRecord dRec(its);
 
             /* Estimate the direct illumination if this is requested */
-            if ((rRec.type & RadianceQueryRecord::EDirectSurfaceRadiance) &&
-                (bsdf->getType() & BSDF::ESmooth)) {
+            if (m_directSampling
+                    && (rRec.type & RadianceQueryRecord::EDirectSurfaceRadiance)
+                    && (bsdf->getType() & BSDF::ESmooth)) {
                 int interactions = m_maxDepth - rRec.depth - 1;
 
                 Spectrum value = scene->sampleAttenuatedEmitterDirect(
@@ -587,11 +604,15 @@ public:
 
             /* If a luminaire was hit, estimate the local illumination and
                weight using the power heuristic */
-            if (!value.isZero() && (rRec.type & RadianceQueryRecord::EDirectSurfaceRadiance)) {
-                const Float emitterPdf = (!(bRec.sampledType & BSDF::EDelta)) ?
-                    scene->pdfEmitterDirect(dRec) : 0;
-                if (!m_onlyPathsThatEnteredAVolume || hasEnteredAVolume)
+            if (!value.isZero() && (rRec.type & RadianceQueryRecord::EDirectSurfaceRadiance)
+                    && (!m_onlyPathsThatEnteredAVolume || hasEnteredAVolume)) {
+                if (m_directSampling) {
+                    const Float emitterPdf = (!(bRec.sampledType & BSDF::EDelta)) ?
+                        scene->pdfEmitterDirect(dRec) : 0;
                     Li += throughput * value * miWeight(bsdfPdf, emitterPdf);
+                } else {
+                    Li += throughput * value;
+                }
             }
 
             /* ==================================================================== */
@@ -705,6 +726,7 @@ public:
     std::string toString() const {
         std::ostringstream oss;
         oss << "VolumetricPathTracer[" << endl
+            << "  directSampling = " << m_directSampling << "," << endl
             << "  explicitSubsurfBoundary = " << m_explicitSubsurfBoundary << "," << endl
             << "  onlyPathsThatEnteredAVolume = " << m_onlyPathsThatEnteredAVolume << "," << endl
             << "  minMediumScatteringChain = " << m_minMediumScatteringChain << "," << endl
