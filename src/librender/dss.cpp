@@ -244,9 +244,6 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     m_internalReflectionWeight = props.getFloat(
             "internalReflectionWeight", 1.0);
 
-    m_noRecursiveSubsurf = props.getBoolean(
-            "noRecursiveSubsurf", false);
-
     m_clampWeight = props.getFloat(
             "clampWeight", -1.0);
 
@@ -334,7 +331,6 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(Stream *stream,
     m_minInternalReflections = stream->readInt();
     m_maxInternalReflections = stream->readInt();
     m_internalReflectionWeight = stream->readFloat();
-    m_noRecursiveSubsurf = stream->readBool();
     m_clampWeight = stream->readFloat();
     m_abortIfBsdfCannotBeRecomputed = stream->readBool();
     m_dumpPaths = stream->readBool();
@@ -364,7 +360,6 @@ void DirectSamplingSubsurface::serialize(Stream *stream,
     stream->writeInt(m_minInternalReflections);
     stream->writeInt(m_maxInternalReflections);
     stream->writeFloat(m_internalReflectionWeight);
-    stream->writeBool(m_noRecursiveSubsurf);
     stream->writeFloat(m_clampWeight);
     stream->writeBool(m_abortIfBsdfCannotBeRecomputed);
     stream->writeBool(m_dumpPaths);
@@ -2334,10 +2329,6 @@ Spectrum DirectSamplingSubsurface::Li_internal(
             }
 
             // Get the actual indirect contribution from the integrator
-            if (m_noRecursiveSubsurf) {
-                // XXX DEBUG TEST (to see if this fixes the fireflies with nontriv (eta!=1) boundary bsdf!!)
-                integratorQuery &= ~RadianceQueryRecord::ESubsurfaceRadiance;
-            }
             rRec.recursiveQuery(rRecBase, integratorQuery, thisWeight);
             Spectrum Li = integrator->Li(ray, rRec);
             result += Li * thisWeight;
