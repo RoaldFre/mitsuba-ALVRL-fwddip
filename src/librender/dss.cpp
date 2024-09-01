@@ -255,8 +255,8 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
 
     /* Don't consider incoming surface points that are more absorption
      * lengths away from the outgoing query point than this factor. */
-    Float cutoffNumAbsorptionLengths = props.getFloat(
-            "cutoffNumAbsorptionLengths", 10);
+    Float cutoffNumEffectiveTransportLengths = props.getFloat(
+            "cutoffNumEffectiveTransportLengths", 10);
 
     m_onlyCollectClosestIntersections = props.getBoolean(
             "onlyCollectClosestIntersections", false);
@@ -289,8 +289,11 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
      * classes if need be. */
     Spectrum sigmaA, sigmaS, g;
     lookupMaterial(props, sigmaS, sigmaA, g, &m_eta); // also sets m_eta
+    Spectrum sigmaSPrime = sigmaS * (Spectrum(1.0f) - g);
+    Spectrum sigmaTPrime = sigmaSPrime + sigmaA;
+    Spectrum sigmaTr = (sigmaA * sigmaTPrime * 3.0f).sqrt();
     // TODO: if m_singleChannel: use the exact sigma_a for the current channel!
-    m_itsDistanceCutoff = cutoffNumAbsorptionLengths / sigmaA.min();
+    m_itsDistanceCutoff = cutoffNumEffectiveTransportLengths / sigmaTr.min();
     m_numItsLayers = props.getInteger("numItsLayers", -1);
 
     m_internalGeometryOverlapMargin = props.getFloat(
