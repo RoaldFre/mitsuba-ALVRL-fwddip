@@ -211,7 +211,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
      * (probably a good idea to use a finite maxInternalReflections!) */
     m_numSIRsurfaceIntReflFactor = props.getFloat("numSIRsurfaceIntReflFactor", 1);
 
-    m_useRmsWeightForSIR = props.getBoolean("useSpectralRmsForSIR", false);
+    m_useRmsWeightForSIR = props.getBoolean("useSpectralRmsForSIR", true);
 
     /* Force path splitting into (at least) this many paths when sampling an internal reflection event */
     m_internalReflectionForcedSplit = props.getSize("internalReflectionForcedSplit", 0);
@@ -239,7 +239,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     /* Maximum number of subsequent internal reflections. Negative value 
      * for unbounded. */
     m_maxInternalReflections = props.getInteger(
-            "maxInternalReflections", -1);
+            "maxInternalReflections", 2);
 
     m_internalReflectionWeight = props.getFloat(
             "internalReflectionWeight", 1.0);

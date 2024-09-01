@@ -33,9 +33,9 @@ public:
         m_debug_uniform_ps_max = props.getFloat("debug_uniform_ps_max", -1);
         m_debug_requested_hemi_weight = props.getFloat("debug_requested_hemi_weight", -1);
 
-        m_useRayDirSurfSampler = props.getBoolean("rayDirSurfSampler", true); /* TODO Disable by default because very high ray cost for not much benefit unless very sparse media (in which case subsurf model isn't the best choice anyway) */
+        m_useRayDirSurfSampler = props.getBoolean("rayDirSurfSampler", false); /* Disabled by default because very high ray cost for not much benefit unless very sparse media (in which case subsurf model isn't the best choice anyway) */
         m_useBidirectionalRayDirSurfSampler = props.getBoolean("bidirectionalRayDirSurfSampler", true);
-        m_rayDirSurfSamplerStrategy = props.getString("rayDirSurfSamplerStrategy", "pt"); // TODO change default to ss or om?
+        m_rayDirSurfSamplerStrategy = props.getString("rayDirSurfSamplerStrategy", "ss");
 
         Log(EInfo, "FWDSCAT DEBUG: ps[%f|%f..%f], hemi %f", 
                 m_debug_override_ps,

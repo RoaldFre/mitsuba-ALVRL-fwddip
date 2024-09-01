@@ -345,8 +345,8 @@ public:
         }
 
         m_dirHemiWeight = m_dipoles[0]->getRequestedDirectionalCosineHemisphereWeight();
-        m_sampleRealVirtOverall = props.getBoolean("sampleRealVirtOverall", false);
-        m_overallRealSourceWeight = props.getFloat("overallRealSourceWeight", 0.8);
+        m_sampleRealVirtOverall = props.getBoolean("sampleRealVirtOverall", true);
+        m_overallRealSourceWeight = props.getFloat("overallRealSourceWeight", 0.95);
 
         Log(EInfo, "DipoleDSS settings: m_dirHemiWeight %f, m_sampleRealVirtOverall %d, m_overallRealSourceWeight %f",
                 m_dirHemiWeight, m_sampleRealVirtOverall, m_overallRealSourceWeight);
@@ -933,8 +933,8 @@ inline DipoleConfig::DipoleConfig(const Properties &props) {
     shareSampledExtraParams = props.getBoolean("shareSampledExtraParams", true);
     if (!shareSampledExtraParams) // TODO
         SLog(EWarn, "TODO disabling shareSampledExtraParams is currently "
-                "broken, it has a slight bias (noticed in combination "
-                "with surfaceSIR)");
+                "BROKEN, it has a slight bias (noticed in combination "
+                "with surfaceSIR)!");
 
     Spectrum _sigmaS, _sigmaA, _g;
     lookupMaterial(props, _sigmaS, _sigmaA, _g, &eta);
