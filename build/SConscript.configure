@@ -1,3 +1,4 @@
+from __future__ import print_function
 import re, multiprocessing
 
 Import('sys', 'os', 'SCons', 'resources')
@@ -108,19 +109,19 @@ env.Append(CPPPATH=env['BASEINCLUDE'])
 env.Append(CPPFLAGS=[])
 env.Append(LIBPATH=[])
 env.Append(LIBS=env['BASELIB'])
-if env.has_key('BOOSTINCLUDE'):
+if 'BOOSTINCLUDE' in env:
         env.Prepend(CPPPATH=env['BOOSTINCLUDE'])
-if env.has_key('BOOSTLIBDIR'):
+if 'BOOSTLIBDIR' in env:
         env.Prepend(LIBPATH=env['BOOSTLIBDIR'])
-if env.has_key('BOOSTLIB'):
+if 'BOOSTLIB' in env:
         env.Prepend(LIBS=env['BOOSTLIB'])
-if env.has_key('BASELIBDIR'):
+if 'BASELIBDIR' in env:
         env.Append(LIBPATH=env['BASELIBDIR'])
-if env.has_key('OEXRINCLUDE'):
+if 'OEXRINCLUDE' in env:
         env.Prepend(CPPPATH=env['OEXRINCLUDE'])
-if env.has_key('OEXRLIBDIR'):
+if 'OEXRLIBDIR' in env:
         env.Prepend(LIBPATH=env['OEXRLIBDIR'])
-if env.has_key('EIGENINCLUDE'):
+if 'EIGENINCLUDE' in env:
         env.Prepend(CPPPATH=env['EIGENINCLUDE'])
 
 env.Decider('MD5-timestamp')
@@ -139,35 +140,35 @@ libPathPrevious = SCons.Util.semi_deepcopy(env['LIBPATH'])
 cppFlagsPrevious = SCons.Util.semi_deepcopy(env['CPPFLAGS'])
 cxxFlagsPrevious = SCons.Util.semi_deepcopy(env['CXXFLAGS'])
 
-if env.has_key('PNGINCLUDE'):
+if 'PNGINCLUDE' in env:
         env.Prepend(CPPPATH=env['PNGINCLUDE'])
-if env.has_key('PNGLIBDIR'):
+if 'PNGLIBDIR' in env:
         env.Prepend(LIBPATH=env['PNGLIBDIR'])
-if env.has_key('JPEGINCLUDE'):
+if 'JPEGINCLUDE' in env:
         env.Prepend(CPPPATH=env['JPEGINCLUDE'])
-if env.has_key('JPEGLIBDIR'):
+if 'JPEGLIBDIR' in env:
         env.Prepend(LIBPATH=env['JPEGLIBDIR'])
-if env.has_key('OEXRFLAGS'):
+if 'OEXRFLAGS' in env:
         env.Prepend(CPPFLAGS=env['OEXRFLAGS'])
-if env.has_key('OEXRINCLUDE'):
+if 'OEXRINCLUDE' in env:
         env.Prepend(CPPPATH=env['OEXRINCLUDE'])
-if env.has_key('OEXRLIBDIR'):
+if 'OEXRLIBDIR' in env:
         env.Prepend(LIBPATH=env['OEXRLIBDIR'])
-if env.has_key('XERCESINCLUDE'):
+if 'XERCESINCLUDE' in env:
         env.Prepend(CPPPATH=env['XERCESINCLUDE'])
-if env.has_key('XERCESLIBDIR'):
+if 'XERCESLIBDIR' in env:
         env.Prepend(LIBPATH=env['XERCESLIBDIR'])
-if env.has_key('GLINCLUDE'):
+if 'GLINCLUDE' in env:
         env.Prepend(CPPPATH=env['GLINCLUDE'])
-if env.has_key('GLFLAGS'):
+if 'GLFLAGS' in env:
         env.Prepend(CPPFLAGS=env['GLFLAGS'])
-if env.has_key('COLLADAINCLUDE'):
+if 'COLLADAINCLUDE' in env:
         env.Prepend(CPPPATH=env['COLLADAINCLUDE'])
-if env.has_key('COLLADALIBDIR'):
+if 'COLLADALIBDIR' in env:
         env.Prepend(LIBPATH=env['COLLADALIBDIR'])
-if env.has_key('FFTWINCLUDE'):
+if 'FFTWINCLUDE' in env:
         env.Prepend(CPPPATH=env['FFTWINCLUDE'])
-if env.has_key('FFTWLIBDIR'):
+if 'FFTWLIBDIR' in env:
         env.Prepend(LIBPATH=env['FFTWLIBDIR'])
 
 conf = Configure(env, custom_tests = { 'CheckCXX' : CheckCXX })
@@ -281,7 +282,9 @@ else:
 Export('MTS_VERSION')
 
 if needsBuildDependencies:
-        versionFilename = GetBuildPath('#dependencies/version')
+        versionFilename = GetBuildPath('#dependencies/version.txt')
+        if not os.path.exists(versionFilename):
+            versionFilename = GetBuildPath('#dependencies/version')
         versionMismatch = False
 
         if not os.path.exists(versionFilename):

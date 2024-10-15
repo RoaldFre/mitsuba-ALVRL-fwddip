@@ -135,12 +135,7 @@ class _Automoc:
                 out_sources = source[:]
 
                 for obj in source:
-                        # work-around to be python2 & python3 compatible
-                        try:
-                            basestring
-                        except NameError:
-                            basestring = str
-                        if isinstance(obj,basestring):  # big kludge!
+                        if isinstance(obj,str):  # big kludge!
                                 print("scons: qt5: '%s' MAYBE USING AN OLD SCONS VERSION AND NOT CONVERTED TO 'File'. Discarded." % str(obj))
                                 continue
                         if not obj.has_builder():
@@ -157,6 +152,8 @@ class _Automoc:
                         #cpp_contents = comment.sub('', cpp.get_contents())
                         try:
                                 cpp_contents = cpp.get_contents()
+                                if not isinstance(cpp_contents, str):
+                                        cpp_contents = str(cpp_contents)
                         except: continue # may be an still not generated source
                         h=None
                         for h_ext in header_extensions:
@@ -169,10 +166,12 @@ class _Automoc:
                                                 print("scons: qt: Scanning '%s' (header of '%s')" % (str(h), str(cpp)))
                                         #h_contents = comment.sub('', h.get_contents())
                                         h_contents = h.get_contents()
+                                        if not isinstance(h_contents, str):
+                                                h_contents = str(h_contents)
                                         break
                         if not h and debug:
                                 print("scons: qt: no header for '%s'." % (str(cpp)))
-                        if h and q_object_search.search(str(h_contents)):
+                        if h and q_object_search.search(h_contents):
                                 # h file with the Q_OBJECT macro found -> add moc_cpp
                                 moc_cpp = env.Moc5(h)
                                 moc_o = objBuilder(moc_cpp)
@@ -180,7 +179,7 @@ class _Automoc:
                                 #moc_cpp.target_scanner = SCons.Defaults.CScan
                                 if debug:
                                         print("scons: qt: found Q_OBJECT macro in '%s', moc'ing to '%s'" % (str(h), str(moc_cpp)))
-                        if cpp and q_object_search.search(str(cpp_contents)):
+                        if cpp and q_object_search.search(cpp_contents):
                                 # cpp file with Q_OBJECT macro found -> add moc
                                 # (to be included in cpp)
                                 moc = env.Moc5(cpp)
@@ -308,6 +307,8 @@ def generate(env):
                                         result.append(itemPath)
                         return result
                 contents = node.get_contents()
+                if not isinstance(contents, str):
+                        contents = str(contents)
                 includes = qrcinclude_re.findall(contents)
                 qrcpath = os.path.dirname(node.path)
                 dirs = [included for included in includes if os.path.isdir(os.path.join(qrcpath,included))]
