@@ -519,6 +519,11 @@ public:
     Float targetUpperThroughput;
 
     /**
+     * Russian roulette always kills path with throughput lower than this
+     * threshold, even if \c startDepth isn't reached yet. */
+    Float forceKillThroughput;
+
+    /**
      * When forcing termination for path longer than \c forcedDepth, use
      * this probability as an upper bound of the continuation probability. */
     static const Float FORCED_MAX_PROB;
@@ -534,6 +539,7 @@ public:
         maxSplits = props.getInteger("maxSplits", 1000);
         targetLowerThroughput = props.getFloat("rrTargetLowerThroughput", 0.3f);
         targetUpperThroughput = props.getFloat("rrTargetUpperThroughput", 3.0f);
+        forceKillThroughput = props.getFloat("rrForceKillThroughput", 1e-10f);
 
         if (targetLowerThroughput <= 0 || targetUpperThroughput <= 0) {
             SLog(EError, "Lower and upper target throughputs should be "
@@ -557,6 +563,7 @@ public:
         maxSplits = stream->readInt();
         targetLowerThroughput = stream->readFloat();
         targetUpperThroughput = stream->readFloat();
+        forceKillThroughput = stream->readFloat();
     }
     /// Serialize to a stream.
     inline void serialize(Stream *stream) const {
@@ -565,6 +572,7 @@ public:
         stream->writeInt(maxSplits);
         stream->writeFloat(targetLowerThroughput);
         stream->writeFloat(targetUpperThroughput);
+        stream->writeFloat(forceKillThroughput);
     }
 
     /// Is Russian roulette enabled?
@@ -586,6 +594,7 @@ public:
      * For depths greater than forcedDepth (if positive): stop with at
      * least some probability to avoid getting stuck (e.g. due to total
      * internal reflection).
+     * Paths with throughput below the forceKillThroughput are always stopped.
      *
      * \param depth
      *    The current path depth.
@@ -601,6 +610,9 @@ public:
      */
     inline Float roulette(int depth, const Spectrum &throughput,
             Float eta, Sampler *sampler) const {
+        if (throughput.maxAbsolute() < forceKillThroughput)
+            return 0.0f;
+
         if (!rouletteEnabled() || depth < startDepth)
             return 1.0f;
 
@@ -696,7 +708,8 @@ public:
                ", forced " << forcedDepth <<
                ", maxSplits " << maxSplits <<
                ", targetLo " << targetLowerThroughput <<
-               ", targetHi " << targetUpperThroughput << "]";
+               ", targetHi " << targetUpperThroughput <<
+               ", forceKill " << targetUpperThroughput << "]";
         return oss.str();
     }
 };
