@@ -748,7 +748,7 @@ Float WeightIntersectionSampler::pdf(
      * intersection should be in the list when this function is called
      * (otherwise we would have bailed out more early!) */
     if (ourIdx == (size_t) -1) {
-#ifdef MTS_DEBUG
+#ifdef MTS_DSS_DEBUG
         SLog(EWarn, "Could not seem to find our own intersection. "
                 "(Num candidates: %d, cumul weight %e, newIts.p %s, "
                 "newIts.n %s, shape %s)",
@@ -760,8 +760,8 @@ Float WeightIntersectionSampler::pdf(
         return 0.0f;
     }
 
-    if (!(ourWeight <= cumulWeight * (1 + sqrt(Epsilon)))) {
-#ifdef MTS_DEBUG
+#ifdef MTS_DSS_DEBUG
+    if (!(ourWeight <= cumulWeight * 1.01)) {
         Float sumOfOtherWeights = 0;
         for (size_t i = 0; i < intersections.size(); i++) {
             if (i == ourIdx)
@@ -775,11 +775,10 @@ Float WeightIntersectionSampler::pdf(
                 "ours %e, cumul %e, rel %e, num its %d, sumOfOthers %e, relSumOthers %e",
                 ourWeight, cumulWeight, ourWeight/cumulWeight,
                 intersections.size(), sumOfOtherWeights, sumOfOtherWeights/cumulWeight);
-#endif
-        return 1.0f;
     }
+#endif
 
-    return ourWeight / cumulWeight;
+    return std::min((Float)1.0f, ourWeight / cumulWeight);
 }
 
 
@@ -1159,7 +1158,7 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsFromBssrdf(
         Spectrum check_bsdfValWithCosine = bsdf->eval(bRec, bsdfMeasure);
         if (!((bsdfValWithCosine - check_bsdfValWithCosine).maxAbsolute()
                 < Epsilon*bsdfValWithCosine.maxAbsolute())) {
-#ifdef MTS_DEBUG
+#ifdef MTS_DSS_DEBUG
             Log(EWarn, "Computed bsdf val not consistent with bsdf eval: %s vs %s (factor %f)",
                     bsdfValWithCosine.toString(),
                     check_bsdfValWithCosine.toString(),
@@ -1314,7 +1313,7 @@ Spectrum DirectSamplingSubsurface::sampleDirectionsDirect(
         Spectrum check_bsdfValWithCosine = bsdf->eval(bRec, bsdfMeasure);
         if (!((bsdfValWithCosine - check_bsdfValWithCosine).maxAbsolute()
                 < Epsilon*bsdfValWithCosine.maxAbsolute())) {
-#ifdef MTS_DEBUG
+#ifdef MTS_DSS_DEBUG
             Log(EWarn, "Computed bsdf val not consistent with bsdf eval: %s vs %s (factor %f)",
                     bsdfValWithCosine.toString(),
                     check_bsdfValWithCosine.toString(),
