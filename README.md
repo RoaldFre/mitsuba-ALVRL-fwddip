@@ -94,8 +94,8 @@ under the `fwddip` name. A typical configuration snippet will look like this
 ```xml
 <!-- Define the subsurface scattering model -->
 <subsurface type="fwddip" id="medium_fwddip">
-    <rgb name="sigmaS" value="YOUR_VALUE_HERE"/>
-    <rgb name="sigmaA" value="YOUR_VALUE_HERE"/>
+    <spectrum name="sigmaS" value="YOUR_VALUE_HERE"/>
+    <spectrum name="sigmaA" value="YOUR_VALUE_HERE"/>
     <float name="g" value="YOUR_VALUE_HERE"/>
 
     <!-- The forward scattering dipole model itself is index-matched and
@@ -125,6 +125,10 @@ under the `fwddip` name. A typical configuration snippet will look like this
          than sampling an incoming surface position, which uses ray tracing
          to project onto the geometry. See also numSIRsurface. -->
     <integer name="SIRnonSurfaceOversamplingFactor" value="1"/>
+
+    <!-- Use the fast effective BRDF approximation instead of the full
+         subsurface scattering model? -->
+    <boolean name="useEffectiveBRDF" value="false"/>
 </subsurface>
 
 <!-- Define the geometry that uses the subsurface scattering model -->
