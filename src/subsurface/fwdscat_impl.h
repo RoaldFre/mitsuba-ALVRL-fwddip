@@ -299,11 +299,6 @@ FS_INLINE Float FwdScat::sampleExtraParamsMonopole(
         s = m_debug_override_ps / p;
         return 1;
     }
-    if (m_debug_uniform_ps_min != -1 && m_debug_uniform_ps_max != -1) {
-        Float delta = (m_debug_uniform_ps_max-m_debug_uniform_ps_min);
-        s = (m_debug_uniform_ps_min + delta*sampler->next1D())/p;
-        return p/delta;
-    }
 
     Float p1, p2, p3;
     p1 = p2 = p3 = -1;
@@ -344,22 +339,6 @@ FS_INLINE Float FwdScat::sampleExtraParamsMonopole(
                + lengthSample_w3 * p3);
 
 
-    if (m_debug_uniform_ps_min != -1) {
-        Assert(m_debug_uniform_ps_max == -1);
-        if (p*s < m_debug_uniform_ps_min) {
-            s = -1;
-            return 0;
-        }
-    }
-    if (m_debug_uniform_ps_max != -1) {
-        Assert(m_debug_uniform_ps_min == -1);
-        if (p*s > m_debug_uniform_ps_max) {
-            s = -1;
-            return 0;
-        }
-    }
-
-
     FSAssert(pdf > 0);
 #ifdef MTS_FWDSCAT_DEBUG
     Float pdfCheck = pdfExtraParamsMonopole(m);
@@ -395,24 +374,6 @@ FS_INLINE Float FwdScat::pdfExtraParamsMonopole(const Monopole &m) const {
     if (m_debug_override_ps != -1) {
         Assert(s == m_debug_override_ps / p);
         return 1;
-    }
-    if (m_debug_uniform_ps_min != -1 && m_debug_uniform_ps_max != -1) {
-        Assert(p*s > m_debug_uniform_ps_min);
-        Assert(p*s < m_debug_uniform_ps_max);
-        Float delta = (m_debug_uniform_ps_max-m_debug_uniform_ps_min);
-        return p/delta;
-    }
-    if (m_debug_uniform_ps_min != -1) {
-        Assert(m_debug_uniform_ps_max == -1);
-        if (p*s < m_debug_uniform_ps_min) {
-            return 0;
-        }
-    }
-    if (m_debug_uniform_ps_max != -1) {
-        Assert(m_debug_uniform_ps_min == -1);
-        if (p*s > m_debug_uniform_ps_max) {
-            return 0;
-        }
     }
 
     const Vector *d_inPtr = (m.hasDin() ? &m.d_in : NULL);

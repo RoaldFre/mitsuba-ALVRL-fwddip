@@ -20,28 +20,29 @@ public:
         if (m_direction_min_mu == -1) {
 #ifdef SINGLE_PRECISION
             // WARNING: Single precision has not been tested! Value is just a guess...
-            m_direction_min_mu = 1e-3;
-#else
             m_direction_min_mu = 1e-4;
+#else
+            m_direction_min_mu = 1e-8;
 #endif
         }
 
         m_exactMargOverDirectionWeight = props.getBoolean("exactMargOverDirectionWeight", true);
 
         m_debug_override_ps = props.getFloat("debug_override_ps", -1);
-        m_debug_uniform_ps_min = props.getFloat("debug_uniform_ps_min", -1);
-        m_debug_uniform_ps_max = props.getFloat("debug_uniform_ps_max", -1);
         m_debug_requested_hemi_weight = props.getFloat("debug_requested_hemi_weight", -1);
 
-        m_useRayDirSurfSampler = props.getBoolean("rayDirSurfSampler", false); /* Disabled by default because very high ray cost for not much benefit unless very sparse media (in which case subsurf model isn't the best choice anyway) */
+        /* rayDirSurfSampler: disabled by default because very high ray cost for
+         * not much benefit unless very sparse media (in which case subsurf
+         * model isn't the best choice anyway) */
+        m_useRayDirSurfSampler = props.getBoolean("rayDirSurfSampler", false);
         m_useBidirectionalRayDirSurfSampler = props.getBoolean("bidirectionalRayDirSurfSampler", true);
         m_rayDirSurfSamplerStrategy = props.getString("rayDirSurfSamplerStrategy", "ss");
 
-        Log(EInfo, "FWDSCAT DEBUG: ps[%f|%f..%f], hemi %f", 
+#ifdef MTS_FWDSCAT_DEBUG
+        Log(EInfo, "FWDSCAT DEBUG: ps override %f, requested hemi weight %f",
                 m_debug_override_ps,
-                m_debug_uniform_ps_min,
-                m_debug_uniform_ps_max,
                 m_debug_requested_hemi_weight);
+#endif
 
         Log(EInfo, "Loaded FwdScat medium with p = %f, g %f; %s)",
                 p, g, toString().c_str());
@@ -53,8 +54,6 @@ public:
         m_direction_min_mu = stream->readFloat();
         m_exactMargOverDirectionWeight = stream->readBool();
         m_debug_override_ps = stream->readFloat();
-        m_debug_uniform_ps_min = stream->readFloat();
-        m_debug_uniform_ps_max = stream->readFloat();
         m_debug_requested_hemi_weight = stream->readFloat();
         m_useRayDirSurfSampler = stream->readBool();
         m_useBidirectionalRayDirSurfSampler = stream->readBool();
@@ -68,8 +67,6 @@ public:
         stream->writeFloat(m_direction_min_mu);
         stream->writeBool(m_exactMargOverDirectionWeight);
         stream->writeFloat(m_debug_override_ps);
-        stream->writeFloat(m_debug_uniform_ps_min);
-        stream->writeFloat(m_debug_uniform_ps_max);
         stream->writeFloat(m_debug_requested_hemi_weight);
         stream->writeBool(m_useRayDirSurfSampler);
         stream->writeBool(m_useBidirectionalRayDirSurfSampler);
@@ -83,11 +80,12 @@ public:
                 <<", p="<<p
                 <<", minMu="<<m_direction_min_mu
                 <<", eta="<<m_eta
-                <<", exactMargOverDirectionWeight="<<m_exactMargOverDirectionWeight
-                <<", rayDirSurfSampler="<<m_useRayDirSurfSampler
-                <<", bidirRayDirSurfSamp="<<m_useBidirectionalRayDirSurfSampler
-                <<", rayDirSurfSamplerStrategy="<<m_rayDirSurfSamplerStrategy
-                <<"]";
+                <<", exactMargOverDirectionWeight="<<m_exactMargOverDirectionWeight;
+        if (m_useRayDirSurfSampler)
+            oss <<", rayDirSurfSampler="<<m_useRayDirSurfSampler
+                    <<", bidirRayDirSurfSamp="<<m_useBidirectionalRayDirSurfSampler
+                    <<", rayDirSurfSamplerStrategy="<<m_rayDirSurfSamplerStrategy;
+        oss <<"]";
         return oss.str();
     }
 
@@ -230,8 +228,6 @@ protected:
     bool m_exactMargOverDirectionWeight;
 
     Float m_debug_override_ps;
-    Float m_debug_uniform_ps_min;
-    Float m_debug_uniform_ps_max;
     Float m_debug_requested_hemi_weight;
 
     MTS_DECLARE_CLASS();
