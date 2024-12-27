@@ -77,8 +77,10 @@ MTS_NAMESPACE_BEGIN
  * This plugin implements the initial classical dipole due to Jensen
  * et.\ al. The difference with the regular dipole plugin is that the
  * uncacheddipole does not use an irradiance cache but samples the
- * irradiance during the path tracing itself. For more information, see the
- * documentation of the dipole plugin.
+ * irradiance during the path tracing itself.
+ *
+ * For information on additional parameters, take a look at the
+ * DirectSamplingSubsurface class.
  */
 
 class IsotropicDipoleUncached : public DirectSamplingSubsurface {

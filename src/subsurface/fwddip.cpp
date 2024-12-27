@@ -906,7 +906,7 @@ protected:
  *         When sampling an incoming query point on the surface of the
  *         associated geometry, don't consider points that are further away
  *         from the outgoing point than this number of effective transport
- *         lengths. For `coloured' absorption, this corresponds to the longest
+ *         lengths. For chromatic media, this corresponds to the longest
  *         effective transport length over all channels.
  *         \default{10}
  *     }
@@ -993,20 +993,25 @@ protected:
  * }
  *
  * This plugin implements the forward scattering dipole model from
- * Frederickx and Dutr\'e (`A Forward Scattering Dipole Model from a
- * Functional Integral Approximation', SIGGRAPH2017).
+ * Roald Frederickx's PhD thesis `Functional Integrals for a Forward Scattering
+ * Dipole Model' (KU Leuven, 2025). It is an improved version of what was
+ * originally published at SIGGRAPH 2017 (`A Forward Scattering Dipole Model
+ * from a Functional Integral Approximation', Frederickx and Dutr\'e).
  *
  * This subsurface scattering model currently only works with the
  * \c volpath integrator. It is recommended to use path splitting (combined
- * with Russian roulette) and ideally with a statistically robust rendering
- * method such as provided by the \c RobustAdaptiveMC integrator, which can
- * wrap around \c volpath. Doing so should drastically increase the
- * convergence speed by lessening the effect of fireflies.
+ * with Russian roulette) and ideally some denoising as a post processing step
+ * (for instance the simple robust pixel estimator in the \code{mtsutil tonemap}
+ * utility). Doing so should increase the convergence speed by lessening the
+ * effect of fireflies/outlier samples.
  *
  * For scenes where the geometry associated with this subsurface model is
  * less complex than the geometry of the rest of the scene, it might also
- * be worthwile to increase \c numSIR to obtain better estimates of the
+ * be worthwile to increase \c numSIRsurface to obtain better estimates of the
  * subsurface contribution per ray.
+ *
+ * For information on additional model parameters, also see the DipoleDSS and
+ * DirectSamplingSubsurface classes.
  */
 typedef DipoleDSS<FwdScat> FwdDip; // TODO can the documentation generation handle/find this?
 

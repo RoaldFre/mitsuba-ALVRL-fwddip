@@ -253,8 +253,9 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     m_dumpPaths = props.getBoolean(
             "dumpPaths", false);
 
-    /* Don't consider incoming surface points that are more absorption
-     * lengths away from the outgoing query point than this factor. */
+    /* Don't consider incoming surface points that are more effective transport
+     * lengths away from the outgoing query point than this factor (the maximum
+     * is taken across all spectral channels). */
     Float cutoffNumEffectiveTransportLengths = props.getFloat(
             "cutoffNumEffectiveTransportLengths", 10);
 
@@ -292,7 +293,7 @@ DirectSamplingSubsurface::DirectSamplingSubsurface(const Properties &props) :
     Spectrum sigmaSPrime = sigmaS * (Spectrum(1.0f) - g);
     Spectrum sigmaTPrime = sigmaSPrime + sigmaA;
     Spectrum sigmaTr = (sigmaA * sigmaTPrime * 3.0f).sqrt();
-    // TODO: if m_singleChannel: use the exact sigma_a for the current channel!
+    // TODO: if m_singleChannel: use the exact value for the current channel!
     m_itsDistanceCutoff = cutoffNumEffectiveTransportLengths / sigmaTr.min();
     m_numItsLayers = props.getInteger("numItsLayers", -1);
 
