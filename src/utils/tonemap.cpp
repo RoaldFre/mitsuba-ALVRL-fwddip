@@ -186,7 +186,7 @@ public:
         bool merge = false;
         bool noLDR = false;
         Float robustFraction = 0;
-        long maxNumBitmapsToMerge = -1;
+        size_t maxNumBitmapsToMerge = 0;
 
         /* Parse command-line arguments */
         while ((optchar = getopt(argc, argv, "htMC:R:xag:m:f:r:b:c:o:p:s:B:F:n")) != -1) {
