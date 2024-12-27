@@ -505,7 +505,7 @@ public:
             } else {
                 /* Robust merging requested */
 
-                if (maxNumBitmapsToMerge > 0 && argc < maxNumBitmapsToMerge) {
+                if (maxNumBitmapsToMerge > 0 && (size_t)argc < maxNumBitmapsToMerge) {
                     Log(EError, "Requested merge cutoff of %zu bitmaps, but only %d input files provided. Bailing out!",
                             maxNumBitmapsToMerge, argc);
                 }
