@@ -814,8 +814,6 @@ protected:
 
 
 
-
-
 /*!\plugin{fwddip}{Forward Scattering Dipole subsurface scattering model}
  * \parameters{
  *     \parameter{material}{\String}{
@@ -913,7 +911,7 @@ protected:
  *         \default{10}
  *     }
  *     \parameter{direction_min_mu}{\Float}{
- *         Regularisation for extremely small overall direction deviations, 
+ *         Regularisation for extremely small overall direction deviations,
  *         with overall deviation cosine equal to 1-direction_min_mu.
  *         For experiments with extremely sparse media (nearly transparent),
  *         this should be reduced to a smaller value, e.g. 1e-11
@@ -935,7 +933,8 @@ protected:
  *         \default{\texttt{diff}}
  *     }
  *     \parameter{tangentMode}{\String}{
- *         The method used for determining the normal of the tangent plane for the dipole configuration.
+ *         The method used for determining the normal of the tangent plane for
+ *         the dipole configuration.
  *         \begin{enumerate}[(i)]
  *             \item \code{incoming}: Use the normal of the incoming point.
  *             \item \code{outgoing}: Use the normal of the outgoing point.
@@ -975,6 +974,21 @@ protected:
  *         (for an index-matched boundary) \emph{no} radiance should be
  *         emitted back to the inside of the boundary.
  *         \default{\code{false}}
+ *     }
+ *     \parameter{maxIncomingEffectiveCosine}{\Float}{
+ *         Reject incoming directions that have a cosine with respect to the
+ *         normal of the effective tangent plane in excess of
+ *         \code{maxIncomingEffectiveCosine}. This can be used to reject
+ *         incoming directions that appear to come from inside and point
+ *         \emph{outwards}, to various degrees.
+ *         In the initial version of this fwddip model published at SIGGRAPH,
+ *         there was a \code{rejectInternalIncoming} option which would
+ *         correspond to a \code{maxIncomingEffectiveCosine} of 0. However,
+ *         this is no longer advised for the updated fwddip model (as
+ *         described in the PhD thesis of Roald Frederickx), as it leads to
+ *         excessive darkening around thin edges. Keeping this value at its
+ *         default of 1 means that no directions get rejected.
+ *         \default{1}
  *     }
  * }
  *

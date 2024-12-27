@@ -36,15 +36,15 @@ static StatsCounter avgPathLength("Volumetric path tracer",
  *         and so on. \default{\code{-1}}
  *     }
  *     \parameter{rrDepth}{\Integer}{Specifies the minimum path depth, after
- *        which the implementation will start to use the ``russian roulette''
+ *        which the implementation will start to use the ``Russian roulette''
  *        path termination criterion. \default{\code{5}}
  *     }
  *     \parameter{rrForcedDepth}{\Integer}{Specifies the minimum path depth, after
- *        which the implementation will force the ``russian roulette'' path
+ *        which the implementation will force the ``Russian roulette'' path
  *        termination probabilities to be less than unity. A value of \code{-1}
  *        corresponds to $\infty$.\default{\code{-1}}
  *     }
- *     \parameter{rrTargetThroughput}{\Float}{The ``russian roulette'' path
+ *     \parameter{rrTargetThroughput}{\Float}{The ``Russian roulette'' path
  *        termination criterion will try to keep the path weights at or
  *        above this value. When the interesting parts of the scene end up
  *        being much less bright than the light sources, setting this to a
@@ -57,12 +57,22 @@ static StatsCounter avgPathLength("Volumetric path tracer",
  *        \default{\code{true}}
  *     }
  *     \parameter{explicitSubsurfBoundary}{\Boolean}{
- *        When encauntering shapes with a subsurface scattering model that 
+ *        When encountering shapes with a subsurface scattering model that
  *        supports explicit boundaries (i.e.\ models that can return
- *        $L_\mathrm{i}$ instead of $L_\mathrm{o}$, and thus can be coupled 
- *        to arbitrary BSDFs as boundaries), should we use this capability? 
+ *        $L_\mathrm{i}$ instead of $L_\mathrm{o}$, and thus can be coupled
+ *        to arbitrary BSDFs as boundaries), should we use this capability?
  *        Usually, this would be the right thing to do.
  *        \default{\code{true}}
+ *     }
+ *     \parameter{maxSubsurfInteractions}{\Integer}{
+ *        When encountering shapes with a subsurface scattering model that
+ *        can return $L_\mathrm{i}$ instead of $L_\mathrm{o}$, limit the
+ *        number of such subsurface scattering model evaluations along a
+ *        single path to this value. Setting this to 1 avoids
+ *        self-illumination (or inter-illumination) of such subsurface
+ *        scattering materials. Setting this too high can increase the
+ *        variance and create energy conservation issues.
+ *        \default{\code{2}}
  *     }
  *     \parameter{strictNormals}{\Boolean}{Be strict about potential
  *        inconsistencies involving shading normals? See
@@ -140,7 +150,7 @@ public:
         m_onlyPathsThatEnteredAVolume = props.getBoolean("onlyPathsThatEnteredAVolume", false);
         m_minMediumScatteringChain = props.getInteger("minMediumScatteringChain", -1);
         m_maxMediumScatteringChain = props.getInteger("maxMediumScatteringChain", -1);
-        m_maxSubsurfInteractions = props.getInteger("maxSubsurfInteractions", -1);
+        m_maxSubsurfInteractions = props.getInteger("maxSubsurfInteractions", 2);
         m_explicitSubsurfBoundary = props.getBoolean("explicitSubsurfBoundary", true);
         m_dumpLuminanceOfSamples = props.getBoolean("dumpLuminanceOfSamples", false);
 
