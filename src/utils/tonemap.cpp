@@ -525,7 +525,7 @@ public:
                         Log(EWarn, "Error was: %s.", e.what());
                         continue;
                     }
-                    if (bitmaps.size() >= maxNumBitmapsToMerge) {
+                    if (maxNumBitmapsToMerge > 0 && bitmaps.size() >= maxNumBitmapsToMerge) {
                         Log(EInfo, "Stopped loading input files because cutoff "
                                 "num files reached (%zu)", maxNumBitmapsToMerge);
                         break;
